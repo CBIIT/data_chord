@@ -96,7 +96,10 @@
 
 .stage-three-summary {
   display: grid;
-  grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  text-align: center;
+  row-gap: var(--space-6);
   align-items: center;
   column-gap: clamp(var(--space-12), 6vw, 5rem);
   padding-bottom: var(--space-8);
@@ -111,6 +114,11 @@
   display: grid;
   justify-items: center;
   gap: var(--space-5);
+}
+
+.stage-three-verdict {
+  grid-row: 1;
+  max-width: 48rem;
 }
 
 .stage-three-dial {
@@ -206,8 +214,8 @@
 }
 
 .stage-three-verdict h1 {
-  max-width: 19ch;
-  margin: 0;
+  max-width: 30ch;
+  margin: 0 auto;
   color: var(--gray-900);
   font-size: clamp(1.8rem, 4vw, 2.6rem);
   letter-spacing: -0.035em;
@@ -217,7 +225,7 @@
 
 .stage-three-result-message {
   max-width: 46ch;
-  margin: var(--space-4) 0 0;
+  margin: var(--space-4) auto 0;
   color: var(--gray-700);
   font-size: 1rem;
   line-height: 1.55;

@@ -291,7 +291,7 @@ const _getInputValue = (entry, pendingOverrides) => {
  * @returns {string}
  */
 const _buildCardHTML = (params) => {
-  const { columnLabel, labelText, fidelitySymbol, fidelityTooltip, matchFidelity, effectiveValue, originalValue, isPVConformant, hasPVs } = params;
+  const { columnLabel, labelText, fidelityTooltip, matchFidelity, effectiveValue, originalValue, isPVConformant, hasPVs } = params;
   const safeColumnLabel = escapeHtml(columnLabel);
   const safeLabelText = escapeHtml(labelText);
   const safeEffectiveValue = escapeHtml(effectiveValue);
@@ -301,8 +301,8 @@ const _buildCardHTML = (params) => {
   const warningHidden = isPVConformant ? ' style="display: none;"' : '';
   const checkHidden = isPVConformant ? '' : ' style="display: none;"';
   const pvStatusIcons = hasPVs
-    ? `<span class="pv-warning-icon" data-tooltip="This current value isn't an approved value, but it might point you in the right direction." aria-label="Warning: value not in permissible values"${warningHidden}>⚠</span><span class="pv-conformant-icon" aria-label="Value is in permissible values"${checkHidden}>✓</span>`
-    : '';
+    ? `<span class="pv-warning-icon" data-tooltip="The current output is not in the approved list." aria-label="Warning: value not in permissible values"${warningHidden}>⚠ <span>Not in approved list</span></span><span class="pv-conformant-icon" aria-label="Value is in permissible values"${checkHidden}>✓ <span>In approved list</span></span>`
+    : '<span class="card-neutral-status">No approved list</span>';
 
   // Add conformant class to header when value is in PV list
   const headerClasses = ['card-header-row'];
@@ -312,15 +312,14 @@ const _buildCardHTML = (params) => {
 
   return `
     <div class="${headerClasses.join(' ')}">
-      <span class="fidelity-indicator fidelity-${matchFidelity}" data-tooltip="${fidelityTooltip}" aria-label="${matchFidelity} match fidelity">${fidelitySymbol}</span>
-      <div class="entry-row-label">${safeLabelText}</div>
-      ${pvStatusIcons}
+      <span class="card-column-title">${safeColumnLabel}</span>
+      <div class="card-value-status">${pvStatusIcons}</div>
     </div>
     <div class="card-body" role="group" aria-label="${safeColumnLabel} transformation">
       <div class="original-context">
         <span class="original-context-label">was:</span>
         <span class="original-context-value">${originalValueHTML}</span>
-        <button type="button" class="revert-btn" aria-label="Revert to original value" title="Revert to original">↩</button>
+        <button type="button" class="revert-btn" aria-label="Restore source value">↩ Restore source value</button>
       </div>
       <div class="target-value-wrapper">
         <span class="target-value-label">now:</span>
@@ -339,8 +338,27 @@ const _buildCardHTML = (params) => {
           </span>
         </label>
       </div>
+      <p class="card-result-note" role="status"></p>
+    </div>
+    <div class="card-review-meta">
+      <span class="fidelity-indicator fidelity-${matchFidelity}" title="AI result: ${escapeHtml(fidelityTooltip)}" aria-label="${matchFidelity} match fidelity">AI match: ${escapeHtml(matchFidelity)}</span>
+      ${labelText !== columnLabel ? `<div class="entry-row-label">${safeLabelText}</div>` : ''}
     </div>
   `;
+};
+
+// Recommendation history and current output are separate facts. A later edit
+// must not keep telling the reviewer that the source value was retained.
+const _updateResultNote = (card, originalValue, activeValue, hasPVs) => {
+  const note = card.querySelector('.card-result-note');
+  if (!note) return;
+  if (!card.classList.contains('no-recommendation')) {
+    note.hidden = true;
+    return;
+  }
+  note.textContent = activeValue === originalValue
+    ? `No match found. Source value kept. ${hasPVs ? 'Choose an approved value.' : 'Review the source value.'}`
+    : 'You changed the output.';
 };
 
 /**
@@ -411,6 +429,8 @@ const _applyCardState = (params) => {
     headerRow.classList.toggle('pv-conformant', state.showConformantHeader);
   }
 
+  _updateResultNote(card, originalValue, state.activeValue, hasPVs);
+
   return state;
 };
 
@@ -432,6 +452,7 @@ const _attachInputListener = (card, entry, baselineValue, onOverrideChange) => {
   const originalValue = entry.originalValue ?? '';
   // Helper to update revert button visibility based on current effective value
   const updateRevertState = (currentValue) => {
+    _updateResultNote(card, originalValue, currentValue, entry.pvSetAvailable);
     if (originalContext) {
       const canRevertToOriginal = originalValue !== currentValue;
       originalContext.classList.toggle('can-revert', canRevertToOriginal);
@@ -677,10 +698,9 @@ export const createValueCard = (config) => {
   // The baseline is the model result, or the source when no recommendation exists.
   const isNoRecommendation = entry.recommendationType === RECOMMENDATION_TYPE.NO_RECOMMENDATION;
   const baselineValue = isNoRecommendation
-    ? (entry.originalValue ?? '—')
+    ? (entry.originalValue ?? '')
     : (entry.harmonizedValue ?? entry.originalValue ?? '');
 
-  const fidelitySymbol = FIDELITY_SYMBOLS[entry.matchFidelity] ?? '?';
   const fidelityTooltip = FIDELITY_TOOLTIPS[entry.matchFidelity] ?? '';
 
   const pvValues = columnPVs?.[entry.columnKey];
@@ -696,17 +716,17 @@ export const createValueCard = (config) => {
   card.innerHTML = _buildCardHTML({
     columnLabel,
     labelText,
-    fidelitySymbol,
     fidelityTooltip,
     matchFidelity: entry.matchFidelity,
     effectiveValue: initialState.activeValue,
-    originalValue: entry.originalValue ?? '—',
+    originalValue: entry.originalValue ?? '',
     isPVConformant: initialState.isConformant,
     hasPVs: entry.pvSetAvailable,
   });
 
   const originalContext = card.querySelector('.original-context');
   originalContext?.classList.toggle('can-revert', (entry.originalValue ?? '') !== initialState.activeValue);
+  _updateResultNote(card, entry.originalValue ?? '', initialState.activeValue, entry.pvSetAvailable);
 
   // Collect cleanup functions for proper resource management
   const cleanupFns = [];
