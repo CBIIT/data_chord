@@ -583,21 +583,6 @@ const renderColumnScrollMode = (entries) => {
       columnPVs: state.columnPVs,
     });
 
-    // Add column title to header row for scroll mode
-    const headerRow = card.querySelector('.card-header-row');
-    if (headerRow) {
-      const titleEl = document.createElement('span');
-      titleEl.className = 'scroll-mode-column-title';
-      titleEl.textContent = entry.columnLabel;
-      // Insert after row label so layout is: [fidelity] [row] [column title] [pv icons]
-      const rowLabelEl = headerRow.querySelector('.entry-row-label');
-      if (rowLabelEl) {
-        rowLabelEl.after(titleEl);
-      } else {
-        headerRow.append(titleEl);
-      }
-    }
-
     // Make row label clickable to show context popup
     if (fileId && entry.rowIndices?.length) {
       const rowLabelEl = card.querySelector('.entry-row-label');

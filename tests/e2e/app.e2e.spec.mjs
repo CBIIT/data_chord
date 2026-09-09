@@ -296,6 +296,8 @@ test('no-recommendation card warns when its displayed source value is not permis
   await expect(cards).toHaveCount(2);
   await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
+  await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
+  await expect(rejectedCard.getByRole('button', { name: 'Restore source value' })).toBeHidden();
   await expect(rejectedCard.locator('.pv-conformant-icon')).toBeHidden();
   await expect(rejectedCard.locator('.card-header-row')).not.toHaveClass(/pv-conformant/);
   await expect(permittedCard.locator('.pv-warning-icon')).toBeHidden();
@@ -320,6 +322,16 @@ test('no-recommendation card warns when its displayed source value is not permis
   await expect(rejectedCard.locator('.card-header-row')).toHaveClass(/pv-conformant/);
   await expect(rejectedCard).toHaveClass(/no-recommendation/);
   expect(savedOverrides.overrides['8692'].col_0000.human_value).toBe('Carcinoma NOS');
+  await expect(rejectedCard.locator('.card-result-note')).toHaveText('You changed the output.');
+  await expect(rejectedCard.getByRole('button', { name: 'Restore source value' })).toBeVisible();
+
+  // When: the reviewer restores the source through the visible action.
+  await rejectedCard.getByRole('button', { name: 'Restore source value' }).click();
+
+  // Then: the source and its warning return, with the correct no-match explanation.
+  await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
+  await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
+  await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
 });
 
 test('Stage 4 shows server recovery detail with a Stage 3 link', async ({ page }) => {

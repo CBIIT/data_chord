@@ -28,7 +28,7 @@ const _buildModalHTML = ({ originalValue, currentValue, targetCdeLabel, suggesti
 
   // Build suggestion options HTML
   const suggestionValuesSet = new Set(suggestions.map((s) => s.value));
-  const nonConformantTooltip = 'This value is not in the permissible values list, but it may help point you in the right direction.';
+  const nonConformantTooltip = 'This value is not in the approved list and cannot be selected.';
   const suggestionOptionsHTML = suggestions.map((s) => {
     const disabledClass = s.isPVConformant ? '' : ' pv-selection-option--disabled';
     const tooltipAttr = s.isPVConformant ? '' : ` data-tooltip="${nonConformantTooltip}"`;
