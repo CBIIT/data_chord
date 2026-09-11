@@ -224,8 +224,12 @@ const _openStage2SearchHarness = async (page) => {
   );
 };
 
-test('no-recommendation card warns when its displayed source value is not permissible', async ({ page }) => {
+test('no-recommendation card warns when its displayed source value is not permissible', async ({ page }, testInfo) => {
   const fileId = '0123456789abcdef0123456789abcdef';
+  const wrappedValues = [
+    'Adenocarcinoma, Metastatic NOS',
+    'Glioma, Malignant, Diffuse Pediatric-Type High-Grade Glioma, H3-Wildtype And IDH-Wildtype, High-Grade Glioma',
+  ];
   let savedOverrides = null;
   await page.route('**/stage-4/rows', async (route) => {
     await route.fulfill({
@@ -267,7 +271,7 @@ test('no-recommendation card warns when its displayed source value is not permis
             },
           ],
         }],
-        columnPVs: { col_0000: ['Carcinoma NOS', 'Lung Cancer'] },
+        columnPVs: { col_0000: ['Carcinoma NOS', 'Lung Cancer', ...wrappedValues] },
         totalOriginalRows: 10000,
         reviewState: null,
       }),
@@ -297,12 +301,20 @@ test('no-recommendation card warns when its displayed source value is not permis
   await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
-  await expect(rejectedCard.getByRole('button', { name: 'Restore source value' })).toBeHidden();
+  await expect(rejectedCard.getByRole('button', { name: 'Restore original value' })).toBeDisabled();
+  await expect(rejectedCard.locator('.card-column-title')).toHaveCount(0);
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+
+  // When: the reviewer focuses the status icon.
+  await rejectedCard.locator('.pv-warning-icon').focus();
+  // Then: its explanation appears without opening the editor.
+  await expect(page.getByRole('tooltip')).toHaveText('The current value is not in the approved list.');
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
   await expect(rejectedCard.locator('.pv-conformant-icon')).toBeHidden();
-  await expect(rejectedCard.locator('.card-header-row')).not.toHaveClass(/pv-conformant/);
   await expect(permittedCard.locator('.pv-warning-icon')).toBeHidden();
   await expect(permittedCard.locator('.pv-conformant-icon')).toBeVisible();
-  await expect(permittedCard.locator('.card-header-row')).toHaveClass(/pv-conformant/);
   for (const card of await cards.all()) {
     const markerContent = await card.evaluate((element) => getComputedStyle(element, '::after').content);
     expect(markerContent).toBe('none');
@@ -312,26 +324,74 @@ test('no-recommendation card warns when its displayed source value is not permis
   const saveResponse = page.waitForResponse(
     (response) => response.request().method() === 'POST' && response.url().endsWith('/stage-4/overrides'),
   );
-  await rejectedCard.locator('.pv-combobox-link').click();
+  await rejectedCard.locator('.original-context-value').click();
+  await expect(page.locator('.pv-selection-current')).toHaveText('adamantinoma');
   await page.locator('.pv-selection-option[data-value="Carcinoma NOS"]').click();
   await saveResponse;
 
   // Then: the card becomes conformant, stays a no-recommendation card, and saves the override
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeHidden();
   await expect(rejectedCard.locator('.pv-conformant-icon')).toBeVisible();
-  await expect(rejectedCard.locator('.card-header-row')).toHaveClass(/pv-conformant/);
   await expect(rejectedCard).toHaveClass(/no-recommendation/);
   expect(savedOverrides.overrides['8692'].col_0000.human_value).toBe('Carcinoma NOS');
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('You changed the output.');
-  await expect(rejectedCard.getByRole('button', { name: 'Restore source value' })).toBeVisible();
+  await expect(rejectedCard.getByRole('button', { name: 'Restore original value' })).toBeEnabled();
 
   // When: the reviewer restores the source through the visible action.
-  await rejectedCard.getByRole('button', { name: 'Restore source value' }).click();
+  await rejectedCard.getByRole('button', { name: 'Restore original value' }).click();
 
   // Then: the source and its warning return, with the correct no-match explanation.
   await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+
+  // When: the reviewer uses the keyboard to open value editing.
+  await rejectedCard.locator('.pv-combobox-link').focus();
+  await page.keyboard.press('Enter');
+  // Then: the existing editor opens for this card.
+  await expect(page.locator('.pv-selection-current')).toHaveText('adamantinoma');
+  await page.keyboard.press('Escape');
+
+  // When: the layout is viewed at desktop and phone widths.
+  for (const width of [968, 390]) {
+    await page.setViewportSize({ width, height: 921 });
+    await rejectedCard.scrollIntoViewIfNeeded();
+    // Then: the card fits the viewport and its controls remain visible.
+    const bounds = await rejectedCard.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    await expect(rejectedCard.locator('.fidelity-indicator')).toBeVisible();
+    await rejectedCard.locator('.pv-warning-icon').focus();
+    await rejectedCard.locator('.fidelity-indicator').focus();
+    await expect(rejectedCard.locator('.fidelity-indicator')).toHaveAccessibleDescription(/original AI result, not later edits/);
+    const tooltipBounds = await page.getByRole('tooltip').boundingBox();
+    expect(tooltipBounds.x).toBeGreaterThanOrEqual(0);
+    expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`review-cards-${width}.png`) });
+  }
+
+  // Given: the card is shown at the reported width, with long approved values.
+  await page.setViewportSize({ width: 968, height: 921 });
+  for (const value of wrappedValues) {
+    // When: the reviewer selects a value that wraps across several lines.
+    await rejectedCard.locator('.pv-combobox-link').click();
+    await page.getByRole('searchbox', { name: 'Search permissible values' }).fill(value);
+    await page.locator('.pv-selection-option').filter({ hasText: value }).click();
+    // Then: all lines fit, without the rounded mask that clipped the first letters.
+    const link = rejectedCard.locator('.pv-combobox-link');
+    await expect(link).toHaveText(value);
+    const dimensions = await link.evaluate((element) => ({
+      height: element.clientHeight,
+      contentHeight: element.scrollHeight,
+      lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+      radius: getComputedStyle(element).borderRadius,
+    }));
+    expect(dimensions.height).toBeGreaterThan(dimensions.lineHeight);
+    expect(dimensions.contentHeight).toBeLessThanOrEqual(dimensions.height + 1);
+    expect(dimensions.radius).toBe('0px');
+  }
+  await rejectedCard.screenshot({ path: testInfo.outputPath('wrapped-value.png') });
 });
 
 test('Stage 4 shows server recovery detail with a Stage 3 link', async ({ page }) => {
@@ -1686,6 +1746,22 @@ test('an override for a repeated value reaches every matching row', async ({ pag
     has: page.locator('.original-context-value', { hasText: 'Foo' }),
   });
   await expect(card.locator('.entry-row-label')).toHaveText('60 rows');
+  // When: the row count is selected, only source context opens.
+  await card.locator('.entry-row-label').click();
+  // Then: the popup shows the matching source rows, not the value editor.
+  await expect(page.locator('.row-context-dialog')).toBeVisible();
+  await expect(page.locator('.row-context-table')).toContainText('RID-1');
+  await expect(page.locator('.row-context-table')).toContainText('Foo');
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+  await page.locator('.row-context-close-btn').click();
+
+  // When: the free-text card background is selected.
+  await card.locator('.original-context-value').click();
+  // Then: its existing input receives focus.
+  await expect(card.locator('.target-value-input')).toBeFocused();
+  await expect(card.locator('.card-neutral-status')).toBeVisible();
+
+  // When: the reviewer edits the repeated value.
   const save = page.waitForResponse(
     (response) => response.url().includes('/stage-4/overrides') && response.ok(),
   );
