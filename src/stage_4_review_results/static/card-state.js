@@ -6,14 +6,14 @@
  * making it testable independently of the DOM rendering layer.
  */
 
+import { isMissingValue } from '/assets/shared/value-presence.js';
+
 /**
  * @typedef {Object} CardStateInput
  * @property {string} baselineValue - Model result, or source value when no result exists
  * @property {string} overrideValue - User's manual override (empty string = no override)
  * @property {boolean} hasPVs - Whether permissible values exist for this column
  * @property {Set<string>|null} pvSet - Set of valid PVs (null if hasPVs is false)
- * @property {boolean} baselineIsConformant - Whether the baseline value is PV-conformant
- * @property {boolean} [overrideIsKnownConformant] - If true, skip pvSet check for override (value came from verified dropdown selection)
  */
 
 /**
@@ -46,8 +46,6 @@ export const determineCardState = (input) => {
     overrideValue,
     hasPVs,
     pvSet,
-    baselineIsConformant,
-    overrideIsKnownConformant,
   } = input;
 
   const hasOverride = isEffectiveOverride(overrideValue, baselineValue);
@@ -55,28 +53,17 @@ export const determineCardState = (input) => {
   // Derive: what value is currently "active"?
   const activeValue = hasOverride ? overrideValue : baselineValue;
 
-  // Derive: is the active value conformant?
-  // If no PVs exist for this column, treat as neutral (not conformant, not non-conformant)
-  let isConformant;
-  if (!hasPVs) {
-    // No PVs = conformance doesn't apply
-    isConformant = false;
-  } else if (hasOverride) {
-    // Trust the flag when value came from a verified dropdown selection
-    isConformant = overrideIsKnownConformant === true
-      ? true
-      : pvSet !== null && pvSet.has(overrideValue);
-  } else {
-    // The server has already checked the baseline value.
-    isConformant = baselineIsConformant;
-  }
+  // Check the displayed value, not the server flag for a previously saved edit.
+  // Missing data is neither an approved term nor an invalid review value.
+  const hasValue = !isMissingValue(activeValue);
+  const isConformant = hasPVs && hasValue && pvSet !== null && pvSet.has(activeValue);
 
   return {
     activeValue,
     isConformant,
     hasOverride,
     // Only show warning/conformant styling when PVs exist
-    showWarningIcon: hasPVs && !isConformant,
+    showWarningIcon: hasPVs && hasValue && !isConformant,
     showConformantHeader: hasPVs && isConformant,
   };
 };

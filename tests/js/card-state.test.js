@@ -13,7 +13,6 @@ const createInput = (overrides = {}) => ({
   overrideValue: '',
   hasPVs: true,
   pvSet: PV_SET,
-  baselineIsConformant: true,
   ...overrides,
 });
 
@@ -32,9 +31,9 @@ describe('value card display state', () => {
     },
     {
       name: 'warns when the AI suggestion is not permissible',
-      input: { baselineIsConformant: false },
+      input: { baselineValue: 'Unapproved original' },
       expected: {
-        activeValue: AI_SUGGESTION,
+        activeValue: 'Unapproved original',
         isConformant: false,
         hasOverride: false,
         showWarningIcon: true,
@@ -53,10 +52,10 @@ describe('value card display state', () => {
       },
     },
     {
-      name: 'trusts a value selected from the verified permissible-value modal',
+      name: 'checks a selected value against the full permissible-value set',
       input: {
         overrideValue: 'Verified Value From Modal',
-        overrideIsKnownConformant: true,
+        pvSet: new Set([...PV_SET, 'Verified Value From Modal']),
       },
       expected: {
         activeValue: 'Verified Value From Modal',
@@ -64,6 +63,25 @@ describe('value card display state', () => {
         hasOverride: true,
         showWarningIcon: false,
         showConformantHeader: true,
+      },
+    },
+    {
+      name: 'keeps an empty baseline neutral rather than approved or invalid',
+      input: { baselineValue: '' },
+      expected: {
+        activeValue: '',
+        isConformant: false,
+        hasOverride: false,
+        showWarningIcon: false,
+        showConformantHeader: false,
+      },
+    },
+    {
+      name: 'keeps BOM as present text rather than JavaScript trim whitespace',
+      input: { baselineValue: '\ufeff' },
+      expected: {
+        activeValue: '\ufeff', isConformant: false, hasOverride: false,
+        showWarningIcon: true, showConformantHeader: false,
       },
     },
     {
@@ -144,6 +162,20 @@ describe('value card display state', () => {
 
       // Then: the active value and presentation match the behavior contract
       assert.deepEqual(actual, scenario.expected);
+    });
+  }
+
+  for (const value of ['  ', '\t', '\n', '\u0085', '\u001c', '\u00a0']) {
+    it(`keeps missing whitespace ${JSON.stringify(value)} neutral`, () => {
+      // Given: the active source consists only of the server's whitespace characters.
+      const input = createInput({ baselineValue: value });
+      // When: card state is derived.
+      const actual = determineCardState(input);
+      // Then: it has neither an approved check nor an invalid-value warning.
+      assert.deepEqual(actual, {
+        activeValue: value, isConformant: false, hasOverride: false,
+        showWarningIcon: false, showConformantHeader: false,
+      });
     });
   }
 });

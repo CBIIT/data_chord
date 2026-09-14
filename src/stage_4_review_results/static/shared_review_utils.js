@@ -4,6 +4,7 @@
  */
 
 import { createPVCombobox } from './pv_combobox.js';
+import { isMissingValue } from '/assets/shared/value-presence.js';
 import { determineCardState } from './card-state.js';
 import { escapeHtml } from '/assets/shared/html.js';
 
@@ -193,7 +194,7 @@ export const cellNeedsReview = (cell, options = {}) => {
   const harmonized = cell.harmonizedValue ?? '';
 
   // Nothing to review if no original value
-  if (!original) return false;
+  if (isMissingValue(original)) return false;
 
   // Include cells with no AI recommendation (but only if there's an original value)
   if (cell.recommendationType === RECOMMENDATION_TYPE.NO_RECOMMENDATION) {
@@ -277,11 +278,13 @@ const _buildCardClasses = (entry) => {
  */
 const _getInputValue = (entry, pendingOverrides) => {
   if (!entry.rowIndices?.length) {
-    return entry.manualOverride ?? '';
+    return '';
   }
   const firstRowIndex = entry.rowIndices[0];
   const existingOverride = pendingOverrides[String(firstRowIndex)]?.[entry.columnKey];
-  return existingOverride?.human_value ?? entry.manualOverride ?? '';
+  // Review state is hydrated from the server. A cleared edit must not fall back
+  // to the stale manualOverride on the loaded transformation.
+  return existingOverride?.human_value ?? '';
 };
 
 /**
@@ -291,15 +294,15 @@ const _getInputValue = (entry, pendingOverrides) => {
  * @returns {string}
  */
 const _buildCardHTML = (params) => {
-  const { columnLabel, showColumnLabel, labelText, fidelityTooltip, matchFidelity, effectiveValue, originalValue, isPVConformant, hasPVs } = params;
+  const { columnLabel, showColumnLabel, labelText, fidelityTooltip, matchFidelity, effectiveValue, originalValue, showWarningIcon, showConformantHeader, hasPVs } = params;
   const safeColumnLabel = escapeHtml(columnLabel);
   const safeLabelText = escapeHtml(labelText);
   const safeEffectiveValue = escapeHtml(effectiveValue);
   const originalValueHTML = formatWhitespaceMarkers(originalValue);
 
   // Both icons always present when PVs exist - toggle visibility based on conformance
-  const warningHidden = isPVConformant ? ' style="display: none;"' : '';
-  const checkHidden = isPVConformant ? '' : ' style="display: none;"';
+  const warningHidden = showWarningIcon ? '' : ' style="display: none;"';
+  const checkHidden = showConformantHeader ? '' : ' style="display: none;"';
   const pvStatusIcons = hasPVs
     ? `<button type="button" class="card-icon pv-warning-icon" data-card-tooltip="The current value is not in the approved list." aria-label="Value is not in the approved list"${warningHidden}>⚠</button><button type="button" class="card-icon pv-conformant-icon" data-card-tooltip="The current value is in the approved list." aria-label="Value is in the approved list"${checkHidden}>✓</button>`
     : '<button type="button" class="card-icon card-neutral-status" data-card-tooltip="There is no approved list for this column." aria-label="No approved list">—</button>';
@@ -371,8 +374,6 @@ const _updateResultNote = (card, originalValue, activeValue, hasPVs) => {
  * @param {string} params.overrideValue - User's override (empty string = no override)
  * @param {boolean} params.hasPVs - Whether PVs exist for this column
  * @param {Set<string>|null} params.pvSet - Set of valid PVs
- * @param {boolean} params.baselineIsConformant - Whether the baseline value is PV-conformant
- * @param {boolean} [params.overrideIsKnownConformant] - If true, skip pvSet check (value from verified dropdown)
  */
 const _applyCardState = (params) => {
   const {
@@ -383,8 +384,6 @@ const _applyCardState = (params) => {
     overrideValue,
     hasPVs,
     pvSet,
-    baselineIsConformant,
-    overrideIsKnownConformant,
   } = params;
 
   // Get derived state from pure function
@@ -393,8 +392,6 @@ const _applyCardState = (params) => {
     overrideValue,
     hasPVs,
     pvSet,
-    baselineIsConformant,
-    overrideIsKnownConformant,
   });
 
   // Input shows the current effective value (baseline or override)
@@ -645,8 +642,6 @@ const _attachPVCombobox = (card, entry, pvValues, baselineValue, initialValue, o
   const hasPVs = entry.pvSetAvailable;
   // Build Set for O(1) conformance checks
   const pvSet = new Set(pvValues);
-  // The backend computes conformance for the baseline value.
-  const baselineIsConformant = entry.isPVConformant;
 
   // Clear the wrapper and add PV combobox
   inputWrapper.innerHTML = '';
@@ -656,8 +651,7 @@ const _attachPVCombobox = (card, entry, pvValues, baselineValue, initialValue, o
   const displayValue = initialValue || baselineValue;
 
   // Shared function to apply a value change (from combobox or revert click)
-  // isKnownConformant: true when value comes from dropdown (already verified), undefined when reverting
-  const applyValueChange = (value, isKnownConformant) => {
+  const applyValueChange = (value) => {
     const effectiveOverride = value === baselineValue ? '' : value;
 
     // Apply PV conformance styling
@@ -669,8 +663,6 @@ const _attachPVCombobox = (card, entry, pvValues, baselineValue, initialValue, o
       overrideValue: effectiveOverride,
       hasPVs,
       pvSet,
-      baselineIsConformant,
-      overrideIsKnownConformant: isKnownConformant,
     });
 
     // Notify parent
@@ -743,7 +735,6 @@ export const createValueCard = (config) => {
     overrideValue,
     hasPVs: entry.pvSetAvailable,
     pvSet,
-    baselineIsConformant: entry.isPVConformant,
   });
 
   card.innerHTML = _buildCardHTML({
@@ -754,7 +745,8 @@ export const createValueCard = (config) => {
     matchFidelity: entry.matchFidelity,
     effectiveValue: initialState.activeValue,
     originalValue: entry.originalValue ?? '',
-    isPVConformant: initialState.isConformant,
+    showWarningIcon: initialState.showWarningIcon,
+    showConformantHeader: initialState.showConformantHeader,
     hasPVs: entry.pvSetAvailable,
   });
 
