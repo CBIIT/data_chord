@@ -1,7 +1,7 @@
 # Data Chord AWS infrastructure
 
 This directory owns two application infrastructure roots. The separate
-[`datachord-infrastructure`](https://github.com/netrias/datachord-infrastructure)
+[`datachord-infrastructure`](https://github.com/CBIIT/datachord-infrastructure)
 repository owns the AWS account foundation.
 
 See [../DEPLOYMENT.md](../DEPLOYMENT.md) for the operator procedure.

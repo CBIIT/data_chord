@@ -1,0 +1,107 @@
+name: Plan or deploy Data Chord
+
+run-name: >-
+  ${{ inputs.apply && 'Deploy' || 'Plan' }} Data Chord
+  (${{ inputs.target }}/${{ inputs.stage }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        default: bdf
+        type: choice
+        options:
+          - bdf
+      stage:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - prod
+      apply:
+        description: Apply the reviewed plan (false creates a plan only)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: data-chord-${{ inputs.target }}-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deployment:
+    name: ${{ inputs.apply && 'Deploy' || 'Plan' }} ${{ inputs.target }}/${{ inputs.stage }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: ${{ inputs.stage }}
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+
+    steps:
+      - name: Require main for deployment
+        if: inputs.apply && github.ref != 'refs/heads/main'
+        run: |
+          echo "Deployments must run from the main branch." >&2
+          exit 1
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Require a configured deployment environment
+        run: |
+          test -f "environments/${TARGET}/${STAGE}.json" || {
+            echo "Missing environments/${TARGET}/${STAGE}.json" >&2
+            exit 1
+          }
+          python3 infra/scripts/environment.py validate \
+            "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}"
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Authenticate to AWS with GitHub OIDC
+        id: aws-auth
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-${{ inputs.stage }}-${{ github.run_id }}
+          role-duration-seconds: 14400
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          output-credentials: true
+
+      - name: Create deployment plan
+        env:
+          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+        run: infra/scripts/deploy.sh "${TARGET}" "${STAGE}" plan
+
+      - name: Apply reviewed deployment plan
+        if: inputs.apply
+        env:
+          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+        run: infra/scripts/deploy.sh "${TARGET}" "${STAGE}" deploy
+
+      - name: Write workflow summary
+        if: always()
+        run: |
+          {
+            echo "## Data Chord deployment"
+            echo
+            echo "- **Operation:** ${{ inputs.apply && 'plan and deploy' || 'plan only' }}"
+            echo "- **Target:** ${TARGET}"
+            echo "- **Environment:** ${STAGE}"
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

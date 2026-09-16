@@ -41,7 +41,7 @@ docker buildx build \
 ```
 
 The GitHub account must have read access to the private
-`netrias/agentic_harmonization` repository. The token is a build secret and is
+`CBIIT/agentic_harmonization` repository. The token is a build secret and is
 not stored in an image layer.
 
 ### Load reference data
@@ -287,6 +287,34 @@ the table name from `runtime_environment`.
 The rest of this guide describes the full AWS offer. It uses one complete
 example so that you can see each file name and command.
 
+## GitHub Actions deployment
+
+The `Plan or deploy Data Chord` workflow follows the CBIIT tiered-deployment
+pattern. An operator chooses `dev`, `qa`, `staging`, or `prod` and chooses
+whether the run stops after the plan or continues to deployment. Deployment
+runs are accepted only from `main`; one target/stage pair cannot run twice at
+the same time.
+
+Create a GitHub Environment for each stage before using the workflow. Configure
+these values in every environment:
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `AWS_ROLE_TO_ASSUME` | Secret | ARN of the stage's Data Chord deployer role |
+| `AWS_ACCOUNT_ID` | Variable | Expected 12-digit AWS account ID |
+| `AWS_REGION` | Variable | AWS Region from the environment file |
+
+The role must trust GitHub's OIDC provider directly for the matching subject,
+such as `repo:CBIIT/data_chord:environment:staging`, and permit a four-hour
+session. Direct trust is required because chained AWS role sessions are limited
+to one hour. Configure required reviewers and deployment-branch rules on the
+GitHub Environments, especially `prod`.
+
+The corresponding `environments/<target>/<stage>.json` must also be committed.
+Run the workflow once with **Apply** cleared and review the complete plan. Run
+it again from `main` with **Apply** selected; that run creates and validates a
+fresh plan immediately before applying it.
+
 The example uses:
 
 | Name | Example value |
@@ -302,7 +330,7 @@ Replace these values with the values for your environment.
 ## 1. Prepare AWS
 
 Create the AWS foundation first. Follow the
-[foundation deployment guide](https://github.com/netrias/datachord-infrastructure/blob/main/DEPLOYMENT.md).
+[foundation deployment guide](https://github.com/CBIIT/datachord-infrastructure/blob/main/DEPLOYMENT.md).
 Keep the handoff file in the foundation repository:
 
 ```text
@@ -314,12 +342,12 @@ Prepare these account resources before the first application plan:
 - A public Route 53 hosted zone with working DNS delegation. The example uses
   `apps.example.org`.
 - A CodeConnections GitHub connection in `us-east-2`. Give the connection read
-  access to `netrias/data_chord`, then register it as the default GitHub source
+  access to `CBIIT/data_chord`, then register it as the default GitHub source
   credential for CodeBuild. Follow the AWS
   [GitHub App connection procedure](https://docs.aws.amazon.com/codebuild/latest/userguide/connections-github-app.html).
 - A Secrets Manager secret named `data-chord/build/github-app`. Its JSON value
   must contain `app_id`, `installation_id`, and `private_key`. The GitHub App
-  must have read access to the private `netrias/agentic_harmonization`
+  must have read access to the private `CBIIT/agentic_harmonization`
   repository. The build also downloads the public `netrias/netrias_client`
   repository. Follow the AWS
   [secret creation procedure](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
@@ -345,11 +373,11 @@ Install Git, the GitHub CLI, Python 3.13 or later,
 CLI, and OpenTofu 1.10 or later.
 
 Your GitHub account needs read access to Data Chord and
-`netrias/agentic_harmonization`. The install also downloads the public
+`CBIIT/agentic_harmonization`. The install also downloads the public
 `netrias/netrias_client` repository. Then run:
 
 ```bash
-git clone https://github.com/netrias/data_chord.git
+git clone https://github.com/CBIIT/data_chord.git
 cd data_chord
 gh auth status
 gh auth setup-git
@@ -392,7 +420,7 @@ looks like this:
   "application_role_path": "/application/",
   "domain_name": "data-chord-staging.apps.example.org",
   "hosted_zone_name": "apps.example.org",
-  "application_repository_url": "https://github.com/netrias/data_chord.git",
+  "application_repository_url": "https://github.com/CBIIT/data_chord.git",
   "github_app_secret_name": "data-chord/build/github-app",
   "programmatic_api_key_secret_name": "data-chord/staging/programmatic-api-key"
 }
