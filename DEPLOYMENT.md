@@ -282,19 +282,19 @@ Load and verify the approved reference data with the command in section 6
 before you expose the service. Use a separate customer-owned loader role and
 the table name from `runtime_environment`.
 
-## Full AWS deployment
+### GitHub Actions deployment for BDF
 
-The rest of this guide describes the full AWS offer. It uses one complete
-example so that you can see each file name and command.
+The `Plan or deploy Data Chord customer platform` workflow targets this middle
+tier. It does not target the full AWS root. For the initial BDF rollout it
+exposes only `staging`, the only committed BDF environment contract, and its
+forecast is limited to the workflow S3 bucket, its public-access block, and the
+three DynamoDB tables.
 
-## GitHub Actions deployment
-
-The `Plan or deploy Data Chord` workflow follows the CBIIT tiered-deployment
-pattern. The initial BDF rollout exposes only `staging`, the only committed BDF
-environment contract. An operator chooses whether the run stops after the plan
-or waits for approval and continues with that same run's forecast. Every
-AWS-authenticated run is accepted only from `main`; one target/stage pair
-cannot run twice at the same time.
+The container image for the same reviewed commit remains the other half of the
+offer. Publishing that image is deliberately separate because CBIIT must first
+select its registry and compute platform. The workflow does not create or
+modify ECR, CodeBuild, ECS, VPC resources, load balancers, Route 53, ACM,
+Cognito, Secrets Manager, or CloudWatch log groups.
 
 Create a main-only `staging-plan` GitHub Environment and a protected, main-only
 `staging` environment before using the workflow. Configure these values in
@@ -316,16 +316,22 @@ AWS-managed `ReadOnlyAccess` session policy. Do not require reviewers on
 happens after the forecast has completed.
 
 The corresponding `environments/<target>/<stage>.json` must also be committed.
-With **Apply** cleared, the workflow publishes the bounded forecast and stops.
-With **Apply** selected, the plan job publishes the exact receipt and the
-protected apply job waits for approval. After approval, it downloads that
-same-run receipt, verifies its digest and source commit, and revalidates its
-configuration, account, and state identity before applying any change.
+With **Apply** cleared, the workflow publishes the bounded customer-platform
+forecast and stops. With **Apply** selected, the plan job publishes the exact
+receipt and the protected apply job waits for approval. After approval, it
+downloads that same-run receipt, verifies its digest and source commit, and
+revalidates its configuration, account, and state identity before applying any
+change.
 
 Add `dev`, `qa`, or `prod` to the workflow only after committing that stage's
 environment file, adding both exact GitHub environment subjects to the
 foundation, and configuring the corresponding plan and protected apply
 environments.
+
+## Full AWS deployment
+
+The rest of this guide describes the full AWS offer. It uses one complete
+example so that you can see each file name and command.
 
 The example uses:
 

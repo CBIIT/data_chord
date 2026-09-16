@@ -33,3 +33,12 @@ def test_only_configured_staging_and_main_can_request_aws_credentials() -> None:
     assert "          - qa" not in stage_input
     assert "          - prod" not in stage_input
     assert "role-duration-seconds: 14400" in workflow
+
+
+def test_workflow_targets_the_customer_platform_data_plane() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert workflow.count("infra/scripts/customer-platform-deploy.sh") == 2
+    assert "${TARGET}-${STAGE}-customer-platform.json" in workflow
+    assert "infra/scripts/deploy.sh" not in workflow
+    assert "customer-platform" in workflow

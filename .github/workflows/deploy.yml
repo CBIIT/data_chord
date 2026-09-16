@@ -1,7 +1,7 @@
-name: Plan or deploy Data Chord
+name: Plan or deploy Data Chord customer platform
 
 run-name: >-
-  ${{ inputs.apply && 'Plan and deploy' || 'Plan' }} Data Chord
+  ${{ inputs.apply && 'Plan and deploy' || 'Plan' }} Data Chord customer platform
   (${{ inputs.target }}/${{ inputs.stage }})
 
 on:
@@ -62,7 +62,8 @@ jobs:
             exit 1
           }
           python3 infra/scripts/environment.py validate \
-            "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}"
+            "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}" \
+            customer-platform
 
   plan:
     name: Plan ${{ inputs.target }}/${{ inputs.stage }}
@@ -108,8 +109,8 @@ jobs:
         env:
           AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
         run: |
-          infra/scripts/deploy.sh "${TARGET}" "${STAGE}" plan
-          receipt=".plans/${TARGET}-${STAGE}.json"
+          infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" plan
+          receipt=".plans/${TARGET}-${STAGE}-customer-platform.json"
           plan_sha256="$(sha256sum "${receipt}" | cut -d ' ' -f 1)"
           echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
@@ -118,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ inputs.target }}-${{ inputs.stage }}-plan-${{ github.run_id }}
-          path: .plans/${{ inputs.target }}-${{ inputs.stage }}.json
+          path: .plans/${{ inputs.target }}-${{ inputs.stage }}-customer-platform.json
           if-no-files-found: error
           retention-days: 14
 
@@ -169,7 +170,7 @@ jobs:
       - name: Verify reviewed source and plan digest
         run: |
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/${TARGET}-${STAGE}.json" \
+          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/${TARGET}-${STAGE}-customer-platform.json" \
             | sha256sum --check --strict
 
       - name: Authenticate to AWS for approved apply
@@ -186,7 +187,7 @@ jobs:
       - name: Apply exact reviewed deployment forecast
         env:
           AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
-        run: infra/scripts/deploy.sh "${TARGET}" "${STAGE}" deploy
+        run: infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" deploy
 
       - name: Write apply summary
         if: always()

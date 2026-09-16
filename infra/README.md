@@ -27,14 +27,16 @@ The full root in `infra/` provides:
 The foundation does not deploy application resources. The application
 deployment does not create or change the foundation.
 
-The `infra/customer-platform/` root creates only the shared data-plane module:
+The CBIIT deployment workflow targets the `infra/customer-platform/` root,
+which creates only the shared data-plane module:
 
 - one workflow S3 bucket;
 - one S3 public-access block; and
 - three DynamoDB tables.
 
 It creates no IAM role, network, compute, registry, TLS, authentication, or
-logging resource. It reads the foundation schema-v2 handoff directly and uses
+logging resource. It accepts either the foundation schema-v2 handoff or the
+checked-in environment contract and uses
 `datachord/<target>/<stage>/customer-platform/tofu.tfstate`. Its outputs give
 the customer the runtime environment and policies for customer-owned roles.
 

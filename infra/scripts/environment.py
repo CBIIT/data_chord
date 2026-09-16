@@ -194,7 +194,21 @@ def _load_document(path: Path, label: str) -> dict[str, object]:
 
 def load_customer_platform_environment(path: Path, target: str, stage: str) -> CustomerPlatformEnvironment:
     _validate_selection(target, stage)
-    document = _load_document(path, "handoff")
+    document = _load_document(path, "customer-platform configuration")
+    if set(document) == _FIELDS:
+        source = load_environment(path, target, stage)
+        environment = CustomerPlatformEnvironment(
+            account_id=source.account_id,
+            partition=source.partition,
+            region=source.region,
+            state_bucket_name=source.state_bucket_name,
+            deployer_role_arn=source.deployer_role_arn,
+            deployer_boundary_arn=source.deployer_boundary_arn,
+            target=target,
+            stage=stage,
+        )
+        _validate_customer_platform(environment, f"datachord/{target}/")
+        return environment
     _require_exact_fields(document, _HANDOFF_FIELDS, "handoff")
     if document.get("schema_version") != 2:
         raise EnvironmentError("handoff schema_version must be 2")
