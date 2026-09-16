@@ -1,7 +1,7 @@
 name: Plan or deploy Data Chord
 
 run-name: >-
-  ${{ inputs.apply && 'Deploy' || 'Plan' }} Data Chord
+  ${{ inputs.apply && 'Plan and deploy' || 'Plan' }} Data Chord
   (${{ inputs.target }}/${{ inputs.stage }})
 
 on:
@@ -15,45 +15,42 @@ on:
         options:
           - bdf
       stage:
-        description: Deployment environment
+        description: Configured deployment environment
         required: true
-        default: dev
+        default: staging
         type: choice
         options:
-          - dev
-          - qa
           - staging
-          - prod
       apply:
-        description: Apply the reviewed plan (false creates a plan only)
+        description: Wait for approval and apply this run's reviewed forecast
         required: true
         default: false
         type: boolean
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: data-chord-${{ inputs.target }}-${{ inputs.stage }}
   cancel-in-progress: false
 
 jobs:
-  deployment:
-    name: ${{ inputs.apply && 'Deploy' || 'Plan' }} ${{ inputs.target }}/${{ inputs.stage }}
+  preflight:
+    name: Validate deployment request
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment: ${{ inputs.stage }}
+    timeout-minutes: 5
     env:
       TARGET: ${{ inputs.target }}
       STAGE: ${{ inputs.stage }}
-
     steps:
-      - name: Require main for deployment
-        if: inputs.apply && github.ref != 'refs/heads/main'
+      - name: Require main for every privileged run
+        env:
+          REQUESTED_REF: ${{ github.ref }}
         run: |
-          echo "Deployments must run from the main branch." >&2
-          exit 1
+          test "${REQUESTED_REF}" = "refs/heads/main" || {
+            echo "Deployment plans and applies must run from main." >&2
+            exit 1
+          }
 
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,41 +64,138 @@ jobs:
           python3 infra/scripts/environment.py validate \
             "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}"
 
+  plan:
+    name: Plan ${{ inputs.target }}/${{ inputs.stage }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ format('{0}-plan', inputs.stage) }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+    outputs:
+      artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload-plan.outputs.artifact-digest }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: 1.10.3
 
-      - name: Authenticate to AWS with GitHub OIDC
+      - name: Authenticate with read-only AWS permissions
         id: aws-auth
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: data-chord-${{ inputs.stage }}-${{ github.run_id }}
+          role-session-name: data-chord-plan-${{ inputs.stage }}-${{ github.run_id }}
+          role-duration-seconds: 3600
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          output-credentials: true
+          managed-session-policies: |
+            arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Create bounded deployment forecast
+        id: plan
+        env:
+          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+        run: |
+          infra/scripts/deploy.sh "${TARGET}" "${STAGE}" plan
+          receipt=".plans/${TARGET}-${STAGE}.json"
+          plan_sha256="$(sha256sum "${receipt}" | cut -d ' ' -f 1)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload exact reviewed forecast
+        id: upload-plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.target }}-${{ inputs.stage }}-plan-${{ github.run_id }}
+          path: .plans/${{ inputs.target }}-${{ inputs.stage }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write plan summary
+        run: |
+          {
+            echo "## Data Chord deployment plan"
+            echo
+            echo "- **Target:** ${TARGET}"
+            echo "- **Environment:** ${STAGE}"
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
+            echo "- **Artifact SHA-256:** \`${{ steps.upload-plan.outputs.artifact-digest }}\`"
+            echo "- **Apply requested:** ${{ inputs.apply }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    name: Apply reviewed ${{ inputs.target }}/${{ inputs.stage }} forecast
+    if: inputs.apply
+    needs:
+      - preflight
+      - plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: ${{ inputs.stage }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Download this run's reviewed forecast
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.plan.outputs.artifact_id }}
+          path: .plans
+
+      - name: Verify reviewed source and plan digest
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/${TARGET}-${STAGE}.json" \
+            | sha256sum --check --strict
+
+      - name: Authenticate to AWS for approved apply
+        id: aws-auth
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-apply-${{ inputs.stage }}-${{ github.run_id }}
           role-duration-seconds: 14400
           aws-region: ${{ vars.AWS_REGION }}
           allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
           output-credentials: true
 
-      - name: Create deployment plan
-        env:
-          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
-        run: infra/scripts/deploy.sh "${TARGET}" "${STAGE}" plan
-
-      - name: Apply reviewed deployment plan
-        if: inputs.apply
+      - name: Apply exact reviewed deployment forecast
         env:
           AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
         run: infra/scripts/deploy.sh "${TARGET}" "${STAGE}" deploy
 
-      - name: Write workflow summary
+      - name: Write apply summary
         if: always()
         run: |
           {
-            echo "## Data Chord deployment"
+            echo "## Data Chord deployment apply"
             echo
-            echo "- **Operation:** ${{ inputs.apply && 'plan and deploy' || 'plan only' }}"
             echo "- **Target:** ${TARGET}"
             echo "- **Environment:** ${STAGE}"
             echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"

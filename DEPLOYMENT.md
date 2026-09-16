@@ -290,13 +290,15 @@ example so that you can see each file name and command.
 ## GitHub Actions deployment
 
 The `Plan or deploy Data Chord` workflow follows the CBIIT tiered-deployment
-pattern. An operator chooses `dev`, `qa`, `staging`, or `prod` and chooses
-whether the run stops after the plan or continues to deployment. Deployment
-runs are accepted only from `main`; one target/stage pair cannot run twice at
-the same time.
+pattern. The initial BDF rollout exposes only `staging`, the only committed BDF
+environment contract. An operator chooses whether the run stops after the plan
+or waits for approval and continues with that same run's forecast. Every
+AWS-authenticated run is accepted only from `main`; one target/stage pair
+cannot run twice at the same time.
 
-Create a GitHub Environment for each stage before using the workflow. Configure
-these values in every environment:
+Create a main-only `staging-plan` GitHub Environment and a protected, main-only
+`staging` environment before using the workflow. Configure these values in
+both environments:
 
 | Name | Kind | Value |
 | --- | --- | --- |
@@ -304,16 +306,26 @@ these values in every environment:
 | `AWS_ACCOUNT_ID` | Variable | Expected 12-digit AWS account ID |
 | `AWS_REGION` | Variable | AWS Region from the environment file |
 
-The role must trust GitHub's OIDC provider directly for the matching subject,
-such as `repo:CBIIT/data_chord:environment:staging`, and permit a four-hour
-session. Direct trust is required because chained AWS role sessions are limited
-to one hour. Configure required reviewers and deployment-branch rules on the
-GitHub Environments, especially `prod`.
+The role must trust GitHub's OIDC provider directly for the exact subjects
+`repo:CBIIT/data_chord:environment:staging-plan` and
+`repo:CBIIT/data_chord:environment:staging`, and permit a four-hour session.
+Direct trust is required because chained AWS role sessions are limited to one
+hour. The plan job further restricts its effective AWS permissions with the
+AWS-managed `ReadOnlyAccess` session policy. Do not require reviewers on
+`staging-plan`; configure required reviewers on `staging`, where approval
+happens after the forecast has completed.
 
 The corresponding `environments/<target>/<stage>.json` must also be committed.
-Run the workflow once with **Apply** cleared and review the complete plan. Run
-it again from `main` with **Apply** selected; that run creates and validates a
-fresh plan immediately before applying it.
+With **Apply** cleared, the workflow publishes the bounded forecast and stops.
+With **Apply** selected, the plan job publishes the exact receipt and the
+protected apply job waits for approval. After approval, it downloads that
+same-run receipt, verifies its digest and source commit, and revalidates its
+configuration, account, and state identity before applying any change.
+
+Add `dev`, `qa`, or `prod` to the workflow only after committing that stage's
+environment file, adding both exact GitHub environment subjects to the
+foundation, and configuring the corresponding plan and protected apply
+environments.
 
 The example uses:
 
