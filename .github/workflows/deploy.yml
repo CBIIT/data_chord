@@ -1,0 +1,202 @@
+name: Plan or deploy Data Chord customer platform
+
+run-name: >-
+  ${{ inputs.apply && 'Plan and deploy' || 'Plan' }} Data Chord customer platform
+  (${{ inputs.target }}/${{ inputs.stage }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        default: bdf
+        type: choice
+        options:
+          - bdf
+      stage:
+        description: Configured deployment environment
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+      apply:
+        description: Wait for approval and apply this run's reviewed forecast
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-chord-${{ inputs.target }}-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate deployment request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+    steps:
+      - name: Require main for every privileged run
+        env:
+          REQUESTED_REF: ${{ github.ref }}
+        run: |
+          test "${REQUESTED_REF}" = "refs/heads/main" || {
+            echo "Deployment plans and applies must run from main." >&2
+            exit 1
+          }
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Require a configured deployment environment
+        run: |
+          test -f "environments/${TARGET}/${STAGE}.json" || {
+            echo "Missing environments/${TARGET}/${STAGE}.json" >&2
+            exit 1
+          }
+          python3 infra/scripts/environment.py validate \
+            "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}" \
+            customer-platform
+
+  plan:
+    name: Plan ${{ inputs.target }}/${{ inputs.stage }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ format('{0}-plan', inputs.stage) }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+    outputs:
+      artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload-plan.outputs.artifact-digest }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Authenticate with read-only AWS permissions
+        id: aws-auth
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-plan-${{ inputs.stage }}-${{ github.run_id }}
+          role-duration-seconds: 3600
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          output-credentials: true
+          managed-session-policies: |
+            arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Create bounded deployment forecast
+        id: plan
+        env:
+          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+        run: |
+          infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" plan
+          receipt=".plans/${TARGET}-${STAGE}-customer-platform.json"
+          plan_sha256="$(sha256sum "${receipt}" | cut -d ' ' -f 1)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload exact reviewed forecast
+        id: upload-plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.target }}-${{ inputs.stage }}-plan-${{ github.run_id }}
+          path: .plans/${{ inputs.target }}-${{ inputs.stage }}-customer-platform.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write plan summary
+        run: |
+          {
+            echo "## Data Chord deployment plan"
+            echo
+            echo "- **Target:** ${TARGET}"
+            echo "- **Environment:** ${STAGE}"
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
+            echo "- **Artifact SHA-256:** \`${{ steps.upload-plan.outputs.artifact-digest }}\`"
+            echo "- **Apply requested:** ${{ inputs.apply }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    name: Apply reviewed ${{ inputs.target }}/${{ inputs.stage }} forecast
+    if: inputs.apply
+    needs:
+      - preflight
+      - plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: ${{ inputs.stage }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ inputs.target }}
+      STAGE: ${{ inputs.stage }}
+
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Download this run's reviewed forecast
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.plan.outputs.artifact_id }}
+          path: .plans
+
+      - name: Verify reviewed source and plan digest
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/${TARGET}-${STAGE}-customer-platform.json" \
+            | sha256sum --check --strict
+
+      - name: Authenticate to AWS for approved apply
+        id: aws-auth
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-apply-${{ inputs.stage }}-${{ github.run_id }}
+          role-duration-seconds: 14400
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          output-credentials: true
+
+      - name: Apply exact reviewed deployment forecast
+        env:
+          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+        run: infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" deploy
+
+      - name: Write apply summary
+        if: always()
+        run: |
+          {
+            echo "## Data Chord deployment apply"
+            echo
+            echo "- **Target:** ${TARGET}"
+            echo "- **Environment:** ${STAGE}"
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -176,6 +176,50 @@ def test_customer_platform_uses_the_bootstrap_handoff_directly(
     }
 
 
+def test_customer_platform_can_use_the_checked_in_environment_contract(
+    tmp_path: Path,
+) -> None:
+    # Given CI has the checked-in BDF environment but no cross-repository handoff artifact.
+    environment = tmp_path / "staging.json"
+    environment.write_text(json.dumps(_bdf_document()), encoding="utf-8")
+
+    # When the customer-platform root derives its foundation and state inputs.
+    validated = _run(
+        "validate",
+        environment,
+        "bdf",
+        "staging",
+        "customer-platform",
+    )
+    state_key = _run(
+        "get",
+        environment,
+        "bdf",
+        "staging",
+        "state_key",
+        "customer-platform",
+    )
+    variables = _run(
+        "tofu-vars",
+        environment,
+        "bdf",
+        "staging",
+        "customer-platform",
+    )
+
+    # Then CI selects only the middle-tier data plane in the BDF account.
+    assert validated.returncode == 0, validated.stderr
+    assert state_key.stdout.strip() == (
+        "datachord/bdf/staging/customer-platform/tofu.tfstate"
+    )
+    assert json.loads(variables.stdout) == {
+        "aws_region": "us-east-2",
+        "deployment_target": "bdf",
+        "environment": "staging",
+        "expected_account_id": "084828580051",
+    }
+
+
 def test_customer_platform_rejects_a_handoff_for_another_target(
     tmp_path: Path,
 ) -> None:

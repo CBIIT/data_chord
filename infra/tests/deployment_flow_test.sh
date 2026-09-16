@@ -647,7 +647,7 @@ customer_calls="$TEST_ROOT/customer-calls"
 
 # When customer platform is planned and deployed, then it applies only the five data-plane resources.
 MOCK_FORECAST_JSON_OVERRIDE="$customer_plan" run_command \
-  "$customer_calls" netrias staging plan "$handoff" >/dev/null
+  "$customer_calls" netrias staging plan >/dev/null
 MOCK_FORECAST_JSON_OVERRIDE="$customer_plan" \
   MOCK_APPLICATION_JSON_OVERRIDE="$customer_plan" \
   run_command "$customer_calls" netrias staging deploy "$handoff" >/dev/null

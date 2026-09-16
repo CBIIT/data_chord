@@ -41,7 +41,7 @@ docker buildx build \
 ```
 
 The GitHub account must have read access to the private
-`netrias/agentic_harmonization` repository. The token is a build secret and is
+`CBIIT/agentic_harmonization` repository. The token is a build secret and is
 not stored in an image layer.
 
 ### Load reference data
@@ -282,6 +282,52 @@ Load and verify the approved reference data with the command in section 6
 before you expose the service. Use a separate customer-owned loader role and
 the table name from `runtime_environment`.
 
+### GitHub Actions deployment for BDF
+
+The `Plan or deploy Data Chord customer platform` workflow targets this middle
+tier. It does not target the full AWS root. For the initial BDF rollout it
+exposes only `staging`, the only committed BDF environment contract, and its
+forecast is limited to the workflow S3 bucket, its public-access block, and the
+three DynamoDB tables.
+
+The container image for the same reviewed commit remains the other half of the
+offer. Publishing that image is deliberately separate because CBIIT must first
+select its registry and compute platform. The workflow does not create or
+modify ECR, CodeBuild, ECS, VPC resources, load balancers, Route 53, ACM,
+Cognito, Secrets Manager, or CloudWatch log groups.
+
+Create a main-only `staging-plan` GitHub Environment and a protected, main-only
+`staging` environment before using the workflow. Configure these values in
+both environments:
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `AWS_ROLE_TO_ASSUME` | Secret | ARN of the stage's Data Chord deployer role |
+| `AWS_ACCOUNT_ID` | Variable | Expected 12-digit AWS account ID |
+| `AWS_REGION` | Variable | AWS Region from the environment file |
+
+The role must trust GitHub's OIDC provider directly for the exact subjects
+`repo:CBIIT/data_chord:environment:staging-plan` and
+`repo:CBIIT/data_chord:environment:staging`, and permit a four-hour session.
+Direct trust is required because chained AWS role sessions are limited to one
+hour. The plan job further restricts its effective AWS permissions with the
+AWS-managed `ReadOnlyAccess` session policy. Do not require reviewers on
+`staging-plan`; configure required reviewers on `staging`, where approval
+happens after the forecast has completed.
+
+The corresponding `environments/<target>/<stage>.json` must also be committed.
+With **Apply** cleared, the workflow publishes the bounded customer-platform
+forecast and stops. With **Apply** selected, the plan job publishes the exact
+receipt and the protected apply job waits for approval. After approval, it
+downloads that same-run receipt, verifies its digest and source commit, and
+revalidates its configuration, account, and state identity before applying any
+change.
+
+Add `dev`, `qa`, or `prod` to the workflow only after committing that stage's
+environment file, adding both exact GitHub environment subjects to the
+foundation, and configuring the corresponding plan and protected apply
+environments.
+
 ## Full AWS deployment
 
 The rest of this guide describes the full AWS offer. It uses one complete
@@ -302,7 +348,7 @@ Replace these values with the values for your environment.
 ## 1. Prepare AWS
 
 Create the AWS foundation first. Follow the
-[foundation deployment guide](https://github.com/netrias/datachord-infrastructure/blob/main/DEPLOYMENT.md).
+[foundation deployment guide](https://github.com/CBIIT/datachord-infrastructure/blob/main/DEPLOYMENT.md).
 Keep the handoff file in the foundation repository:
 
 ```text
@@ -314,12 +360,12 @@ Prepare these account resources before the first application plan:
 - A public Route 53 hosted zone with working DNS delegation. The example uses
   `apps.example.org`.
 - A CodeConnections GitHub connection in `us-east-2`. Give the connection read
-  access to `netrias/data_chord`, then register it as the default GitHub source
+  access to `CBIIT/data_chord`, then register it as the default GitHub source
   credential for CodeBuild. Follow the AWS
   [GitHub App connection procedure](https://docs.aws.amazon.com/codebuild/latest/userguide/connections-github-app.html).
 - A Secrets Manager secret named `data-chord/build/github-app`. Its JSON value
   must contain `app_id`, `installation_id`, and `private_key`. The GitHub App
-  must have read access to the private `netrias/agentic_harmonization`
+  must have read access to the private `CBIIT/agentic_harmonization`
   repository. The build also downloads the public `netrias/netrias_client`
   repository. Follow the AWS
   [secret creation procedure](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
@@ -345,11 +391,11 @@ Install Git, the GitHub CLI, Python 3.13 or later,
 CLI, and OpenTofu 1.10 or later.
 
 Your GitHub account needs read access to Data Chord and
-`netrias/agentic_harmonization`. The install also downloads the public
+`CBIIT/agentic_harmonization`. The install also downloads the public
 `netrias/netrias_client` repository. Then run:
 
 ```bash
-git clone https://github.com/netrias/data_chord.git
+git clone https://github.com/CBIIT/data_chord.git
 cd data_chord
 gh auth status
 gh auth setup-git
@@ -392,7 +438,7 @@ looks like this:
   "application_role_path": "/application/",
   "domain_name": "data-chord-staging.apps.example.org",
   "hosted_zone_name": "apps.example.org",
-  "application_repository_url": "https://github.com/netrias/data_chord.git",
+  "application_repository_url": "https://github.com/CBIIT/data_chord.git",
   "github_app_secret_name": "data-chord/build/github-app",
   "programmatic_api_key_secret_name": "data-chord/staging/programmatic-api-key"
 }
