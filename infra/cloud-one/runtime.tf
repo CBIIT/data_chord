@@ -79,6 +79,11 @@ resource "aws_iam_role_policy" "task_bedrock" {
         Effect   = "Allow"
         Action   = "sts:GetServiceBearerToken"
         Resource = "*"
+        Condition = {
+          StringEquals = {
+            "sts:AWSServiceName" = "bedrock.amazonaws.com"
+          }
+        }
       },
       {
         Effect   = "Allow"

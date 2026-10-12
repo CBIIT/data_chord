@@ -74,7 +74,10 @@ run "runtime_uses_the_immutable_image_and_private_network" {
   }
 
   assert {
-    condition     = jsondecode(aws_iam_role_policy.task_bedrock.policy).Statement[2].Action == "sts:GetServiceBearerToken"
+    condition = (
+      jsondecode(aws_iam_role_policy.task_bedrock.policy).Statement[2].Action == "sts:GetServiceBearerToken" &&
+      jsondecode(aws_iam_role_policy.task_bedrock.policy).Statement[2].Condition.StringEquals["sts:AWSServiceName"] == "bedrock.amazonaws.com"
+    )
     error_message = "The workload role must be able to obtain short-lived Bedrock Mantle bearer tokens."
   }
 }
