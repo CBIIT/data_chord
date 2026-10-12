@@ -1,6 +1,6 @@
 # Data Chord AWS infrastructure
 
-This directory owns two application infrastructure roots. The separate
+This directory owns three application infrastructure roots. The separate
 [`datachord-infrastructure`](https://github.com/CBIIT/datachord-infrastructure)
 repository owns the AWS account foundation.
 
@@ -27,8 +27,24 @@ The full root in `infra/` provides:
 The foundation does not deploy application resources. The application
 deployment does not create or change the foundation.
 
-The CBIIT deployment workflow targets the `infra/customer-platform/` root,
-which creates only the shared data-plane module:
+The `infra/cloud-one/` root is the initial CBIIT non-production deployment. It
+creates the selected middle tier plus its private runtime:
+
+- an immutable, scan-on-push ECR repository;
+- one workflow S3 bucket and three DynamoDB tables;
+- an ECS cluster, CloudWatch log group, bounded task roles, and (after network
+  completion) one private Fargate service; and
+- no VPC, public IP, load balancer, DNS, certificate, Cognito user pool, or
+  public endpoint.
+
+Bootstrap and runtime share
+`datachord/<target>/<stage>/cloud-one/tofu.tfstate`. Bootstrap deliberately
+leaves the ECS service disabled so ECR and the data plane can be created before
+the first image exists and before the VPC ticket completes. Runtime enablement
+requires an immutable image digest, a VPC id, and at least two private subnets.
+
+The separate `infra/customer-platform/` root remains available for providers
+that own their runtime. It creates only the shared data-plane module:
 
 - one workflow S3 bucket;
 - one S3 public-access block; and
@@ -63,6 +79,13 @@ and extra fields.
 The deployer role and application boundary must use the same foundation name
 prefix. The deployment derives the deployer boundary from that prefix and
 checks the live foundation before it plans.
+
+The Cloud One root uses the narrower
+`infra/scripts/cloud_one_environment.py` contract. Its checked-in file carries
+only non-secret account, state, permissions-boundary, and network identifiers.
+`vpc_id: null` and an empty `private_subnet_ids` list are valid only for
+bootstrap; the runtime command fails closed until they are replaced with the
+approved VPC ticket values.
 
 ## Mutation safety
 

@@ -1,0 +1,191 @@
+name: Bootstrap DataChord Cloud One resources
+
+run-name: >-
+  ${{ inputs.apply && 'Plan and bootstrap' || 'Plan bootstrap' }} DataChord
+  (cbiit/dev)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Wait for dev approval and apply this run's reviewed bootstrap plan
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-chord-cbiit-dev-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate bootstrap request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      account_id: ${{ steps.environment.outputs.account_id }}
+      region: ${{ steps.environment.outputs.region }}
+      state_bucket: ${{ steps.environment.outputs.state_bucket }}
+      state_key: ${{ steps.environment.outputs.state_key }}
+    steps:
+      - name: Require main for every privileged run
+        env:
+          REQUESTED_REF: ${{ github.ref }}
+        run: |
+          test "${REQUESTED_REF}" = "refs/heads/main" || {
+            echo "Cloud One bootstrap must run from main." >&2
+            exit 1
+          }
+
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read the committed environment contract
+        id: environment
+        run: |
+          config="environments/cbiit/dev.json"
+          python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev bootstrap
+          {
+            echo "account_id=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id)"
+            echo "region=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev region)"
+            echo "state_bucket=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev state_bucket_name)"
+            echo "state_key=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev state_key)"
+          } >> "${GITHUB_OUTPUT}"
+
+  plan:
+    name: Plan cbiit/dev bootstrap
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev-plan
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Authenticate with read-only AWS permissions
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-dev-bootstrap-plan-${{ github.run_id }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
+          managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Create exact bootstrap plan
+        id: plan
+        run: |
+          set -euo pipefail
+          mkdir -p .plans
+          python3 infra/scripts/cloud_one_environment.py tofu-vars \
+            environments/cbiit/dev.json cbiit dev bootstrap \
+            > .plans/dev-bootstrap.auto.tfvars.json
+          tofu -chdir=infra/cloud-one init -input=false \
+            -backend-config="bucket=${{ needs.preflight.outputs.state_bucket }}" \
+            -backend-config="key=${{ needs.preflight.outputs.state_key }}" \
+            -backend-config="region=${{ needs.preflight.outputs.region }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          tofu -chdir=infra/cloud-one plan -input=false -lock=false \
+            -var-file="../../.plans/dev-bootstrap.auto.tfvars.json" \
+            -out="../../.plans/dev-bootstrap.tfplan"
+          tofu -chdir=infra/cloud-one show -no-color "../../.plans/dev-bootstrap.tfplan" \
+            > ../../.plans/dev-bootstrap.txt
+          plan_sha256="$(sha256sum .plans/dev-bootstrap.tfplan | cut -d ' ' -f 1)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload exact reviewed bootstrap plan
+        id: upload-plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cbiit-dev-bootstrap-plan-${{ github.run_id }}
+          path: |
+            .plans/dev-bootstrap.tfplan
+            .plans/dev-bootstrap.txt
+            .plans/dev-bootstrap.auto.tfvars.json
+            infra/cloud-one/.terraform.lock.hcl
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write bootstrap plan summary
+        run: |
+          {
+            echo "## DataChord Cloud One bootstrap plan"
+            echo
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
+            echo "- **Apply requested:** ${{ inputs.apply }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    name: Apply reviewed cbiit/dev bootstrap plan
+    if: inputs.apply
+    needs: [preflight, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Download this run's reviewed bootstrap plan
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.plan.outputs.artifact_id }}
+          path: .
+
+      - name: Verify reviewed source and plan digest
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/dev-bootstrap.tfplan" \
+            | sha256sum --check --strict
+
+      - name: Authenticate for approved bootstrap
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-dev-bootstrap-apply-${{ github.run_id }}
+          role-duration-seconds: 3600
+          aws-region: ${{ needs.preflight.outputs.region }}
+          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
+
+      - name: Apply the exact reviewed bootstrap plan
+        run: |
+          tofu -chdir=infra/cloud-one init -input=false \
+            -backend-config="bucket=${{ needs.preflight.outputs.state_bucket }}" \
+            -backend-config="key=${{ needs.preflight.outputs.state_key }}" \
+            -backend-config="region=${{ needs.preflight.outputs.region }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          tofu -chdir=infra/cloud-one apply -input=false "../../.plans/dev-bootstrap.tfplan"
+
+      - name: Write bootstrap summary
+        if: always()
+        run: |
+          {
+            echo "## DataChord Cloud One bootstrap"
+            echo
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

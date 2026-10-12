@@ -1,16 +1,98 @@
 # Deploy Data Chord
 
-Data Chord has three deployment offers:
+Data Chord has four deployment offers:
 
 | Offer | Data profile | Data Chord creates | Customer creates |
 | --- | --- | --- | --- |
 | Portable | `portable` | One container image | Compute, one `/data` volume, network, TLS, and access control |
 | Customer platform | `hosted` | Workflow S3 storage and three DynamoDB tables | Registry, compute, network, TLS, authentication, logs, and workload roles |
+| Cloud One private dev | `hosted` | ECR, ECS, CloudWatch logs, workflow S3 storage, and three DynamoDB tables | Existing VPC/subnets, GitHub OIDC roles, Bedrock access, and later ingress/authentication |
 | Full AWS | `hosted` | The complete AWS application stack | The account foundation and external prerequisites |
 
 Portable does not use the foundation repository. Customer platform and full
-AWS use the state bucket and deployer role from the foundation handoff. Do not
-use customer platform and full AWS for the same target and stage.
+AWS use the state bucket and deployer role from the foundation handoff. Cloud
+One uses the same foundation outputs through its narrower committed contract.
+Do not use customer platform, Cloud One, and full AWS for the same target and
+stage; their application resource names overlap.
+
+## Cloud One private dev deployment
+
+The initial CBIIT target is `cbiit/dev` in non-production account
+`211125567571`, Region `us-east-1`. It intentionally omits a load balancer,
+Cognito, DNS, certificates, and public ingress. The first service is one
+on-demand Fargate task with 1 vCPU, 4 GiB of memory, the default 20 GiB of
+ephemeral storage, five concurrent agentic workers, and one active job. Keep
+minimum, desired, and maximum task counts at one until request routing and the
+in-memory job lifecycle have been qualified for multiple tasks.
+
+The current application dependency is pinned to GPT-5.6. The deployed image
+therefore uses GPT-5.6 Luna for exploration, shortlisting, and CDE ranking, and
+GPT-5.6 Sol for final selection. Newer models can be evaluated separately; do
+not change only the ECS environment and assume the pinned adapter supports
+them.
+
+### Required GitHub environments
+
+Create these main-only GitHub Environments in `CBIIT/data_chord`:
+
+| Environment | Purpose | Required configuration |
+| --- | --- | --- |
+| `dev-build` | Push the immutable commit image to ECR | `AWS_ROLE_TO_ASSUME`; existing repository-level GitHub App variable and private-key secret |
+| `dev-plan` | Read AWS state and create a plan | `AWS_ROLE_TO_ASSUME`; no required reviewers |
+| `dev` | Apply the reviewed bootstrap or runtime plan | `AWS_ROLE_TO_ASSUME`; required reviewers |
+
+The role must trust only the exact GitHub OIDC subjects for those environments.
+The build job adds an ECR-only session policy, and plan jobs add the AWS-managed
+`ReadOnlyAccess` session policy. Apply receives the deployment role's normal
+permissions only after the `dev` environment approval.
+
+### Bootstrap before the first image
+
+The `Bootstrap DataChord Cloud One resources` workflow plans and optionally
+applies the network-independent resources: ECR, S3, DynamoDB, CloudWatch,
+application IAM roles, and the ECS cluster. It uploads the exact binary plan,
+its human-readable rendering, and its SHA-256 digest. The protected apply job
+downloads and applies that same-run plan.
+
+The foundation must exist first. Its expected state bucket is
+`cbiit-datachord-state-211125567571-us-east-1`, and the application state key is
+`datachord/cbiit/dev/cloud-one/tofu.tfstate`.
+
+### Complete the VPC contract
+
+When the VPC request completes, update `environments/cbiit/dev.json` with the
+approved VPC id and at least two private subnet ids. Do not guess these values.
+The subnets need an approved outbound path to ECR, S3, DynamoDB, CloudWatch
+Logs, STS, and Bedrock through NAT or VPC endpoints. The application root does
+not create or alter that path.
+
+The initial security group has no inbound rule. Optional internal CIDR ranges
+can be committed later, but no caller should reach the application until a
+trusted proxy or other approved identity boundary supplies exactly one
+`X-Data-Chord-User-ID` header. `/healthz` remains usable for container health
+without identity.
+
+### Build and release
+
+The `Build and deploy DataChord to Cloud One` workflow:
+
+1. uses the existing GitHub App credential to read the private
+   `CBIIT/agentic_harmonization` dependency during a BuildKit secret mount;
+2. builds or reuses the full Git commit tag in `data-chord-dev` ECR;
+3. resolves that image to its immutable SHA-256 digest;
+4. creates and uploads an exact OpenTofu runtime plan in `dev-plan`;
+5. waits for approval in `dev` when apply was requested;
+6. applies the same reviewed plan and waits for the private ECS service to
+   stabilize.
+
+The workflow is manual for the first deployment. Enable automatic releases
+from `main` only after bootstrap, VPC completion, model-access verification,
+reference-data loading, and one successful reviewed dev deployment.
+
+Before release, verify the account is authorized for GPT-5.6 Luna and Sol in
+`us-east-1`, inspect the destinations of any US cross-Region inference
+profiles, and start with `DATA_CHORD_AGENTIC_WORKERS=5`. Monitor throttles,
+latency, memory, and task restarts before increasing concurrency.
 
 ## Portable container
 
@@ -282,51 +364,13 @@ Load and verify the approved reference data with the command in section 6
 before you expose the service. Use a separate customer-owned loader role and
 the table name from `runtime_environment`.
 
-### GitHub Actions deployment for BDF
+### Customer-platform automation status
 
-The `Plan or deploy Data Chord customer platform` workflow targets this middle
-tier. It does not target the full AWS root. For the initial BDF rollout it
-exposes only `staging`, the only committed BDF environment contract, and its
-forecast is limited to the workflow S3 bucket, its public-access block, and the
-three DynamoDB tables.
-
-The container image for the same reviewed commit remains the other half of the
-offer. Publishing that image is deliberately separate because CBIIT must first
-select its registry and compute platform. The workflow does not create or
-modify ECR, CodeBuild, ECS, VPC resources, load balancers, Route 53, ACM,
-Cognito, Secrets Manager, or CloudWatch log groups.
-
-Create a main-only `staging-plan` GitHub Environment and a protected, main-only
-`staging` environment before using the workflow. Configure these values in
-both environments:
-
-| Name | Kind | Value |
-| --- | --- | --- |
-| `AWS_ROLE_TO_ASSUME` | Secret | ARN of the stage's Data Chord deployer role |
-| `AWS_ACCOUNT_ID` | Variable | Expected 12-digit AWS account ID |
-| `AWS_REGION` | Variable | AWS Region from the environment file |
-
-The role must trust GitHub's OIDC provider directly for the exact subjects
-`repo:CBIIT/data_chord:environment:staging-plan` and
-`repo:CBIIT/data_chord:environment:staging`, and permit a four-hour session.
-Direct trust is required because chained AWS role sessions are limited to one
-hour. The plan job further restricts its effective AWS permissions with the
-AWS-managed `ReadOnlyAccess` session policy. Do not require reviewers on
-`staging-plan`; configure required reviewers on `staging`, where approval
-happens after the forecast has completed.
-
-The corresponding `environments/<target>/<stage>.json` must also be committed.
-With **Apply** cleared, the workflow publishes the bounded customer-platform
-forecast and stops. With **Apply** selected, the plan job publishes the exact
-receipt and the protected apply job waits for approval. After approval, it
-downloads that same-run receipt, verifies its digest and source commit, and
-revalidates its configuration, account, and state identity before applying any
-change.
-
-Add `dev`, `qa`, or `prod` to the workflow only after committing that stage's
-environment file, adding both exact GitHub environment subjects to the
-foundation, and configuring the corresponding plan and protected apply
-environments.
+The customer-platform root and its local plan/deploy commands remain supported
+for providers that own their compute platform. The CBIIT GitHub workflow now
+targets the Cloud One private-dev root described above because CBIIT selected
+ECR and ECS as part of the DataChord deployment. Do not run the older BDF
+`staging` environment contract against the CBIIT non-production account.
 
 ## Full AWS deployment
 

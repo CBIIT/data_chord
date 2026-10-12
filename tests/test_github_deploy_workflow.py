@@ -1,44 +1,54 @@
-"""Static safety contract for the manually dispatched deployment workflow."""
+"""Static safety contracts for the Cloud One GitHub workflows."""
 
 from pathlib import Path
 
-WORKFLOW = (
-    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "deploy.yml"
-)
+ROOT = Path(__file__).resolve().parents[1]
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
+BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "bootstrap-cloud-one.yml"
 
 
-def test_plan_precedes_the_protected_same_run_apply() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    plan_start = workflow.index("\n  plan:\n")
-    apply_start = workflow.index("\n  apply:\n")
-    plan_job = workflow[plan_start:apply_start]
-
-    assert plan_start < apply_start
-    assert "environment: ${{ format('{0}-plan', inputs.stage) }}" in plan_job
-    assert "arn:aws:iam::aws:policy/ReadOnlyAccess" in plan_job
-    assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow
-    assert "${{ needs.plan.outputs.plan_sha256 }}" in workflow
-    assert "environment: ${{ inputs.stage }}" not in plan_job
-
-
-def test_only_configured_staging_and_main_can_request_aws_credentials() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    stage_input = workflow[
-        workflow.index("      stage:\n") : workflow.index("      apply:\n")
-    ]
+def test_release_uses_separate_build_plan_and_protected_apply_environments() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
-    assert "          - staging" in stage_input
-    assert "          - dev" not in stage_input
-    assert "          - qa" not in stage_input
-    assert "          - prod" not in stage_input
-    assert "role-duration-seconds: 14400" in workflow
+    assert "environment: dev-build" in workflow
+    assert "environment: dev-plan" in workflow
+    assert "environment: dev\n" in workflow
+    assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
+    assert "if: inputs.apply" in workflow
 
 
-def test_workflow_targets_the_customer_platform_data_plane() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert workflow.count("infra/scripts/customer-platform-deploy.sh") == 2
-    assert "${TARGET}-${STAGE}-customer-platform.json" in workflow
-    assert "infra/scripts/deploy.sh" not in workflow
-    assert "customer-platform" in workflow
+    assert "actions/create-github-app-token@" in workflow
+    assert "repositories: agentic_harmonization" in workflow
+    assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
+    assert "imageTag=${GITHUB_SHA}" in workflow
+    assert "image_digest" in workflow
+    assert "cloud_one_environment.py validate" in workflow
+    assert "runtime" in workflow
+
+
+def test_release_applies_only_the_same_run_reviewed_plan() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    plan_start = workflow.index("\n  plan:\n")
+    apply_start = workflow.index("\n  apply:\n")
+    assert plan_start < apply_start
+    assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow
+    assert "${{ needs.plan.outputs.plan_sha256 }}" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"' in workflow
+    assert 'apply -input=false "../../.plans/dev-runtime.tfplan"' in workflow
+
+
+def test_bootstrap_is_network_independent_and_approval_gated() -> None:
+    workflow = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tofu-vars" in workflow
+    assert "cbiit dev bootstrap" in workflow
+    assert "runtime" not in workflow
+    assert "environment: dev-plan" in workflow
+    assert "environment: dev\n" in workflow
+    assert "if: inputs.apply" in workflow
+    assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow

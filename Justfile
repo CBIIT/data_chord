@@ -81,11 +81,13 @@ infra-fmt:
 
 infra-validate:
 	tofu -chdir=infra validate
+	tofu -chdir=infra/cloud-one validate
 	tofu -chdir=infra/customer-platform validate
 	tofu -chdir=infra/modules/data-plane validate
 
 infra-test:
 	tofu -chdir=infra test
+	tofu -chdir=infra/cloud-one test
 	tofu -chdir=infra/customer-platform test
 	tofu -chdir=infra/modules/data-plane test
 	bash infra/tests/deployment_flow_test.sh

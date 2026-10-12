@@ -1,28 +1,14 @@
-name: Plan or deploy Data Chord customer platform
+name: Build and deploy DataChord to Cloud One
 
 run-name: >-
-  ${{ inputs.apply && 'Plan and deploy' || 'Plan' }} Data Chord customer platform
-  (${{ inputs.target }}/${{ inputs.stage }})
+  ${{ inputs.apply && 'Build and deploy' || 'Build and plan' }} DataChord
+  (cbiit/dev)
 
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: Deployment target
-        required: true
-        default: bdf
-        type: choice
-        options:
-          - bdf
-      stage:
-        description: Configured deployment environment
-        required: true
-        default: staging
-        type: choice
-        options:
-          - staging
       apply:
-        description: Wait for approval and apply this run's reviewed forecast
+        description: Wait for dev approval and apply this run's reviewed ECS plan
         required: true
         default: false
         type: boolean
@@ -31,127 +17,119 @@ permissions:
   contents: read
 
 concurrency:
-  group: data-chord-${{ inputs.target }}-${{ inputs.stage }}
+  group: data-chord-cbiit-dev-release
   cancel-in-progress: false
 
 jobs:
   preflight:
-    name: Validate deployment request
+    name: Validate dev release request
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      TARGET: ${{ inputs.target }}
-      STAGE: ${{ inputs.stage }}
+    outputs:
+      account_id: ${{ steps.environment.outputs.account_id }}
+      region: ${{ steps.environment.outputs.region }}
+      state_bucket: ${{ steps.environment.outputs.state_bucket }}
+      state_key: ${{ steps.environment.outputs.state_key }}
     steps:
       - name: Require main for every privileged run
         env:
           REQUESTED_REF: ${{ github.ref }}
         run: |
           test "${REQUESTED_REF}" = "refs/heads/main" || {
-            echo "Deployment plans and applies must run from main." >&2
+            echo "Cloud One releases must run from main." >&2
             exit 1
           }
 
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Require a configured deployment environment
+      - name: Read the committed environment contract
+        id: environment
         run: |
-          test -f "environments/${TARGET}/${STAGE}.json" || {
-            echo "Missing environments/${TARGET}/${STAGE}.json" >&2
-            exit 1
-          }
-          python3 infra/scripts/environment.py validate \
-            "environments/${TARGET}/${STAGE}.json" "${TARGET}" "${STAGE}" \
-            customer-platform
+          config="environments/cbiit/dev.json"
+          python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev
+          {
+            echo "account_id=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id)"
+            echo "region=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev region)"
+            echo "state_bucket=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev state_bucket_name)"
+            echo "state_key=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev state_key)"
+          } >> "${GITHUB_OUTPUT}"
 
-  plan:
-    name: Plan ${{ inputs.target }}/${{ inputs.stage }}
+  build:
+    name: Publish immutable application image
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: ${{ format('{0}-plan', inputs.stage) }}
+    environment: dev-build
     permissions:
       contents: read
       id-token: write
-    env:
-      TARGET: ${{ inputs.target }}
-      STAGE: ${{ inputs.stage }}
     outputs:
-      artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
-      artifact_digest: ${{ steps.upload-plan.outputs.artifact-digest }}
-      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
-
+      image_digest: ${{ steps.image.outputs.image_digest }}
+      image_uri: ${{ steps.image.outputs.image_uri }}
     steps:
-      - name: Check out repository
+      - name: Check out reviewed source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set up OpenTofu
-        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+      - name: Create private dependency token
+        id: agentic-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
-          tofu_version: 1.10.3
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: agentic_harmonization
 
-      - name: Authenticate with read-only AWS permissions
-        id: aws-auth
+      - name: Authenticate to the dev image registry
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: data-chord-plan-${{ inputs.stage }}-${{ github.run_id }}
-          role-duration-seconds: 3600
-          aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
-          output-credentials: true
-          managed-session-policies: |
-            arn:aws:iam::aws:policy/ReadOnlyAccess
+          role-session-name: data-chord-dev-build-${{ github.run_id }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
 
-      - name: Create bounded deployment forecast
-        id: plan
+      - name: Build or reuse the commit image
+        id: image
         env:
-          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
+          ACCOUNT_ID: ${{ needs.preflight.outputs.account_id }}
+          AWS_REGION: ${{ needs.preflight.outputs.region }}
+          PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
         run: |
-          infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" plan
-          receipt=".plans/${TARGET}-${STAGE}-customer-platform.json"
-          plan_sha256="$(sha256sum "${receipt}" | cut -d ' ' -f 1)"
-          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
+          set -euo pipefail
+          repository="data-chord-dev"
+          image_uri="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${repository}"
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          if ! aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
+            DOCKER_BUILDKIT=1 docker build \
+              --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
+              --tag "${image_uri}:${GITHUB_SHA}" .
+            docker push "${image_uri}:${GITHUB_SHA}"
+          fi
+          digest="$(aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids "imageTag=${GITHUB_SHA}" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+          test "${digest}" != "None"
+          echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload exact reviewed forecast
-        id: upload-plan
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ inputs.target }}-${{ inputs.stage }}-plan-${{ github.run_id }}
-          path: .plans/${{ inputs.target }}-${{ inputs.stage }}-customer-platform.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Write plan summary
-        run: |
-          {
-            echo "## Data Chord deployment plan"
-            echo
-            echo "- **Target:** ${TARGET}"
-            echo "- **Environment:** ${STAGE}"
-            echo "- **Source:** \`${GITHUB_SHA}\`"
-            echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
-            echo "- **Artifact SHA-256:** \`${{ steps.upload-plan.outputs.artifact-digest }}\`"
-            echo "- **Apply requested:** ${{ inputs.apply }}"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-  apply:
-    name: Apply reviewed ${{ inputs.target }}/${{ inputs.stage }} forecast
-    if: inputs.apply
-    needs:
-      - preflight
-      - plan
+  plan:
+    name: Plan cbiit/dev runtime
+    needs: [preflight, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment: ${{ inputs.stage }}
+    timeout-minutes: 30
+    environment: dev-plan
     permissions:
       contents: read
       id-token: write
-    env:
-      TARGET: ${{ inputs.target }}
-      STAGE: ${{ inputs.stage }}
-
+    outputs:
+      artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
     steps:
       - name: Check out reviewed source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -161,42 +139,132 @@ jobs:
         with:
           tofu_version: 1.10.3
 
-      - name: Download this run's reviewed forecast
+      - name: Require the completed VPC contract
+        run: |
+          python3 infra/scripts/cloud_one_environment.py validate \
+            environments/cbiit/dev.json cbiit dev runtime \
+            "${{ needs.build.outputs.image_digest }}"
+
+      - name: Authenticate with read-only AWS permissions
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: data-chord-dev-plan-${{ github.run_id }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
+          managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Create exact runtime plan
+        id: plan
+        run: |
+          set -euo pipefail
+          mkdir -p .plans
+          python3 infra/scripts/cloud_one_environment.py tofu-vars \
+            environments/cbiit/dev.json cbiit dev runtime \
+            "${{ needs.build.outputs.image_digest }}" > .plans/dev.auto.tfvars.json
+          tofu -chdir=infra/cloud-one init -input=false \
+            -backend-config="bucket=${{ needs.preflight.outputs.state_bucket }}" \
+            -backend-config="key=${{ needs.preflight.outputs.state_key }}" \
+            -backend-config="region=${{ needs.preflight.outputs.region }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          tofu -chdir=infra/cloud-one plan -input=false -lock=false \
+            -var-file="../../.plans/dev.auto.tfvars.json" \
+            -out="../../.plans/dev-runtime.tfplan"
+          tofu -chdir=infra/cloud-one show -no-color "../../.plans/dev-runtime.tfplan" \
+            > ../../.plans/dev-runtime.txt
+          plan_sha256="$(sha256sum .plans/dev-runtime.tfplan | cut -d ' ' -f 1)"
+          echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload exact reviewed runtime plan
+        id: upload-plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cbiit-dev-runtime-plan-${{ github.run_id }}
+          path: |
+            .plans/dev-runtime.tfplan
+            .plans/dev-runtime.txt
+            .plans/dev.auto.tfvars.json
+            infra/cloud-one/.terraform.lock.hcl
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write release plan summary
+        run: |
+          {
+            echo "## DataChord dev release plan"
+            echo
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
+            echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
+            echo "- **Apply requested:** ${{ inputs.apply }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  apply:
+    name: Apply reviewed cbiit/dev runtime plan
+    if: inputs.apply
+    needs: [preflight, build, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.10.3
+
+      - name: Download this run's reviewed runtime plan
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           artifact-ids: ${{ needs.plan.outputs.artifact_id }}
-          path: .plans
+          path: .
 
       - name: Verify reviewed source and plan digest
         run: |
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/${TARGET}-${STAGE}-customer-platform.json" \
+          echo "${{ needs.plan.outputs.plan_sha256 }}  .plans/dev-runtime.tfplan" \
             | sha256sum --check --strict
 
-      - name: Authenticate to AWS for approved apply
-        id: aws-auth
+      - name: Authenticate for approved dev deployment
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-session-name: data-chord-apply-${{ inputs.stage }}-${{ github.run_id }}
-          role-duration-seconds: 14400
-          aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
-          output-credentials: true
+          role-session-name: data-chord-dev-apply-${{ github.run_id }}
+          role-duration-seconds: 3600
+          aws-region: ${{ needs.preflight.outputs.region }}
+          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
 
-      - name: Apply exact reviewed deployment forecast
-        env:
-          AWS_CREDENTIAL_EXPIRATION: ${{ steps.aws-auth.outputs.aws-expiration }}
-        run: infra/scripts/customer-platform-deploy.sh "${TARGET}" "${STAGE}" deploy
+      - name: Apply the exact reviewed plan
+        run: |
+          tofu -chdir=infra/cloud-one init -input=false \
+            -backend-config="bucket=${{ needs.preflight.outputs.state_bucket }}" \
+            -backend-config="key=${{ needs.preflight.outputs.state_key }}" \
+            -backend-config="region=${{ needs.preflight.outputs.region }}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          tofu -chdir=infra/cloud-one apply -input=false "../../.plans/dev-runtime.tfplan"
 
-      - name: Write apply summary
+      - name: Wait for the private ECS service to stabilize
+        run: |
+          aws ecs wait services-stable --cluster data-chord-dev --services data-chord-dev
+          running="$(aws ecs describe-services \
+            --cluster data-chord-dev --services data-chord-dev \
+            --query 'services[0].runningCount' --output text)"
+          test "${running}" = "1"
+
+      - name: Write deployment summary
         if: always()
         run: |
           {
-            echo "## Data Chord deployment apply"
+            echo "## DataChord dev deployment"
             echo
-            echo "- **Target:** ${TARGET}"
-            echo "- **Environment:** ${STAGE}"
             echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
             echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
