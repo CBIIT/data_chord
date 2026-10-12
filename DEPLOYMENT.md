@@ -80,20 +80,32 @@ The `Build and deploy DataChord to Cloud One` workflow:
 1. uses the existing GitHub App credential to read the private
    `CBIIT/agentic_harmonization` dependency during a BuildKit secret mount;
 2. builds or reuses the full Git commit tag in `data-chord-dev` ECR;
-3. resolves that image to its immutable SHA-256 digest;
-4. creates and uploads an exact OpenTofu runtime plan without a deployment
+3. waits for the ECR image scan and rejects any critical or high findings;
+4. resolves that image to its immutable SHA-256 digest;
+5. creates and uploads an exact OpenTofu runtime plan without a deployment
    environment approval;
-5. waits for approval in `dev` when apply was requested;
-6. applies the same reviewed plan and waits for the private ECS service to
-   stabilize.
+6. waits for approval in `dev` when apply was requested;
+7. applies the same reviewed plan and waits for the private ECS service to
+   stabilize; and
+8. runs a one-off task using the deployed task role and private network to
+   round-trip an S3 object, verify all three DynamoDB tables and the populated
+   reference catalog, and call GPT-5.6 Luna and Sol through Bedrock Mantle.
+
+The Docker base images are pinned by tag and immutable registry digest. Update
+the tag and digest together in a reviewed dependency change; never update only
+the tag.
 
 The workflow is manual for the first deployment. Enable automatic releases
 from `main` only after bootstrap, VPC completion, model-access verification,
 reference-data loading, and one successful reviewed dev deployment.
 
-Before release, verify the account is authorized for GPT-5.6 Luna and Sol in
-`us-east-1`, inspect the destinations of any US cross-Region inference
-profiles, and start with `DATA_CHORD_AGENTIC_WORKERS=5`. Monitor throttles,
+Before release, load an approved reference-data export and verify the private
+subnets have the approved outbound path to ECR, S3, DynamoDB, CloudWatch Logs,
+STS, and Bedrock. The release preflight checks that the configured VPC and
+available subnets exist in this account and Region and span at least two
+Availability Zones; the smoke task proves that the task can use the resulting
+runtime path. Also verify the account is authorized for GPT-5.6 Luna and Sol in
+`us-east-1`, and start with `DATA_CHORD_AGENTIC_WORKERS=5`. Monitor throttles,
 latency, memory, and task restarts before increasing concurrency.
 
 ## Portable container

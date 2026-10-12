@@ -77,6 +77,11 @@ resource "aws_iam_role_policy" "task_bedrock" {
       },
       {
         Effect   = "Allow"
+        Action   = "sts:GetServiceBearerToken"
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
         Action   = "bedrock-mantle:CreateInference"
         Resource = "arn:${data.aws_partition.current.partition}:bedrock-mantle:${var.aws_region}:${data.aws_caller_identity.current.account_id}:project/default"
       },

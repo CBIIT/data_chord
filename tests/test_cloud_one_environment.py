@@ -50,6 +50,15 @@ def test_bootstrap_allows_pending_network_but_runtime_fails_closed(tmp_path: Pat
     assert "blocked until vpc_id is populated" in runtime.stderr
 
 
+def test_network_preflight_fails_before_an_image_is_built(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+
+    result = _run("validate", environment, "cbiit", "dev", "network")
+
+    assert result.returncode == 2
+    assert "blocked until vpc_id is populated" in result.stderr
+
+
 def test_runtime_renders_only_after_exact_network_and_digest(tmp_path: Path) -> None:
     document = _document()
     document["vpc_id"] = "vpc-0123456789abcdef0"
@@ -60,8 +69,10 @@ def test_runtime_renders_only_after_exact_network_and_digest(tmp_path: Path) -> 
     environment = _environment(tmp_path, document)
     digest = "sha256:" + "b" * 64
 
+    network = _run("validate", environment, "cbiit", "dev", "network")
     result = _run("tofu-vars", environment, "cbiit", "dev", "runtime", digest)
 
+    assert network.returncode == 0, network.stderr
     assert result.returncode == 0, result.stderr
     variables = json.loads(result.stdout)
     assert variables["runtime_enabled"] is True

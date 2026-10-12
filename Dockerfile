@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # Security: keep uv pinned so dependency age enforcement stays stable in container builds.
-FROM ghcr.io/astral-sh/uv:0.12.3 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc AS uv
 
-FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm AS builder
+FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641 AS builder
 
 ARG DATA_CHORD_INCLUDE_LOCAL_INFERENCE=false
 
@@ -29,7 +29,7 @@ RUN --mount=type=secret,id=github_token \
     esac \
     && git config --global --unset-all url."https://x-access-token:${github_token}@github.com/".insteadOf
 
-FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm AS runtime
+FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641 AS runtime
 
 ENV DATA_CHORD_UPLOAD_DIR="/tmp/data-chord/uploads" \
     DATA_CHORD_DATA_DIR="/data" \

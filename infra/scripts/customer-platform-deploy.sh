@@ -9,12 +9,13 @@ source "$SCRIPT_DIR/lib.sh"
 TARGET_NAME="${1:-}"
 STAGE_NAME="${2:-}"
 MODE="${3:-}"
-ENVIRONMENT_FILE="${4:-$(environment_path "$TARGET_NAME" "$STAGE_NAME")}"
+ENVIRONMENT_FILE="${4:-}"
 
 case "$MODE" in
   plan | deploy) ;;
-  *) fail "Use: customer-platform-deploy.sh <target> <stage> plan|deploy [environment-or-handoff]." ;;
+  *) fail "Use: just customer-plan <target> <stage> <handoff> or just customer-deploy <target> <stage> <handoff>." ;;
 esac
+[[ -n "$ENVIRONMENT_FILE" ]] || fail "A bootstrap handoff file is required."
 
 for command in aws git python3 tofu; do
   require_command "$command"

@@ -122,13 +122,17 @@ def _validate(environment: Environment) -> None:
         raise ConfigurationError("private_subnet_ids must not contain duplicates")
 
 
-def require_runtime(environment: Environment, digest: str) -> None:
-    if not _DIGEST.fullmatch(digest):
-        raise ConfigurationError("runtime image digest must be sha256 followed by 64 lowercase hex characters")
+def require_network(environment: Environment) -> None:
     if environment.vpc_id is None:
         raise ConfigurationError("runtime deployment is blocked until vpc_id is populated from the VPC ticket")
     if len(environment.private_subnet_ids) < 2:
         raise ConfigurationError("runtime deployment requires at least two private_subnet_ids")
+
+
+def require_runtime(environment: Environment, digest: str) -> None:
+    require_network(environment)
+    if not _DIGEST.fullmatch(digest):
+        raise ConfigurationError("runtime image digest must be sha256 followed by 64 lowercase hex characters")
 
 
 def _require_fields(document: dict[str, object]) -> None:
@@ -175,15 +179,25 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_action(
+    environment: Environment,
+    value: str | None,
+    image_digest: str | None,
+) -> None:
+    if value == "network" and image_digest is None:
+        require_network(environment)
+    elif value == "runtime":
+        require_runtime(environment, image_digest or "")
+    elif value not in (None, "bootstrap") or image_digest is not None:
+        raise ConfigurationError("validate accepts only bootstrap, network, or runtime IMAGE_DIGEST")
+
+
 def main(arguments: list[str]) -> int:
     try:
         args = _parser().parse_args(arguments)
         environment = load(args.path, args.target, args.stage)
         if args.action == "validate":
-            if args.value == "runtime":
-                require_runtime(environment, args.image_digest or "")
-            elif args.value not in (None, "bootstrap") or args.image_digest is not None:
-                raise ConfigurationError("validate accepts only bootstrap or runtime IMAGE_DIGEST")
+            _validate_action(environment, args.value, args.image_digest)
             return 0
         if args.action == "get":
             if args.image_digest is not None:

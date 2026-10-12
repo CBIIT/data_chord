@@ -72,4 +72,9 @@ run "runtime_uses_the_immutable_image_and_private_network" {
     )
     error_message = "The initial dev service must keep one private on-demand task warm."
   }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.task_bedrock.policy).Statement[2].Action == "sts:GetServiceBearerToken"
+    error_message = "The workload role must be able to obtain short-lived Bedrock Mantle bearer tokens."
+  }
 }

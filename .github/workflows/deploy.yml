@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: data-chord-cbiit-dev-release
+  group: data-chord-cbiit-dev
   cancel-in-progress: false
 
 jobs:
@@ -49,6 +49,7 @@ jobs:
         run: |
           config="environments/cbiit/dev.json"
           python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev
+          python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev network
           {
             echo "account_id=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id)"
             echo "deployer_role_arn=arn:aws:iam::$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id):role/foundation/cbiit-datachord-deployer"
@@ -89,7 +90,7 @@ jobs:
           aws-region: ${{ needs.preflight.outputs.region }}
           allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
           inline-session-policy: >-
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
 
       - name: Build or reuse the commit image
         id: image
@@ -116,6 +117,22 @@ jobs:
             --image-ids "imageTag=${GITHUB_SHA}" \
             --query 'imageDetails[0].imageDigest' --output text)"
           test "${digest}" != "None"
+          aws ecr wait image-scan-complete \
+            --repository-name "${repository}" \
+            --image-id "imageDigest=${digest}"
+          aws ecr describe-image-scan-findings \
+            --repository-name "${repository}" \
+            --image-id "imageDigest=${digest}" \
+            --output json > /tmp/data-chord-image-scan.json
+          python3 - <<'PY'
+          import json
+
+          scan = json.load(open("/tmp/data-chord-image-scan.json"))
+          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
+          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
+          if sum(blocked.values()):
+              raise SystemExit(f"ECR scan blocks deployment: {blocked}")
+          PY
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
@@ -153,6 +170,34 @@ jobs:
           aws-region: ${{ needs.preflight.outputs.region }}
           allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
           managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Verify VPC and subnet ownership
+        run: |
+          set -euo pipefail
+          config="environments/cbiit/dev.json"
+          vpc_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vpc_id"])' "${config}")"
+          readarray -t subnet_ids < <(
+            python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["private_subnet_ids"], sep="\n")' "${config}"
+          )
+          test "$(aws ec2 describe-vpcs \
+            --vpc-ids "${vpc_id}" \
+            --query 'Vpcs[0].VpcId' --output text)" = "${vpc_id}"
+          aws ec2 describe-subnets --subnet-ids "${subnet_ids[@]}" \
+            --output json > /tmp/data-chord-subnets.json
+          python3 - "${vpc_id}" "${#subnet_ids[@]}" <<'PY'
+          import json
+          import sys
+
+          vpc_id = sys.argv[1]
+          expected_count = int(sys.argv[2])
+          subnets = json.load(open("/tmp/data-chord-subnets.json"))["Subnets"]
+          if len(subnets) != expected_count:
+              raise SystemExit("AWS did not return every configured subnet")
+          if any(item["VpcId"] != vpc_id or item["State"] != "available" for item in subnets):
+              raise SystemExit("every subnet must be available and belong to the configured VPC")
+          if len({item["AvailabilityZone"] for item in subnets}) < 2:
+              raise SystemExit("private subnets must span at least two Availability Zones")
+          PY
 
       - name: Create exact runtime plan
         id: plan
@@ -257,6 +302,34 @@ jobs:
             --cluster data-chord-dev --services data-chord-dev \
             --query 'services[0].runningCount' --output text)"
           test "${running}" = "1"
+
+      - name: Exercise the task role, data plane, and selected models
+        run: |
+          set -euo pipefail
+          aws ecs describe-services \
+            --cluster data-chord-dev --services data-chord-dev \
+            --query 'services[0].networkConfiguration' --output json \
+            > /tmp/data-chord-network.json
+          task_arn="$(aws ecs run-task \
+            --cluster data-chord-dev \
+            --task-definition data-chord-dev \
+            --launch-type FARGATE \
+            --network-configuration file:///tmp/data-chord-network.json \
+            --overrides '{"containerOverrides":[{"name":"app","command":["python","-m","scripts.cloud_one_smoke"]}]}' \
+            --query 'tasks[0].taskArn' --output text)"
+          test "${task_arn}" != "None"
+          aws ecs wait tasks-stopped --cluster data-chord-dev --tasks "${task_arn}"
+          aws ecs describe-tasks --cluster data-chord-dev --tasks "${task_arn}" \
+            --output json > /tmp/data-chord-smoke-task.json
+          python3 - <<'PY'
+          import json
+
+          task = json.load(open("/tmp/data-chord-smoke-task.json"))["tasks"][0]
+          container = task["containers"][0]
+          if container.get("exitCode") != 0:
+              detail = container.get("reason") or task.get("stoppedReason") or "unknown failure"
+              raise SystemExit(f"Cloud One smoke task failed: {detail}")
+          PY
 
       - name: Write deployment summary
         if: always()
