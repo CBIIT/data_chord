@@ -7,13 +7,15 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "bootstrap-cloud-one.yml"
 
 
-def test_release_uses_separate_build_plan_and_protected_apply_environments() -> None:
+def test_release_uses_jobs_for_build_and_plan_and_one_dev_environment() -> None:
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
-    assert "environment: dev-build" in workflow
-    assert "environment: dev-plan" in workflow
-    assert "environment: dev\n" in workflow
+    assert "environment: dev-build" not in workflow
+    assert "environment: dev-plan" not in workflow
+    assert workflow.count("environment: dev\n") == 1
+    assert "deployer_role_arn" in workflow
+    assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
     assert "if: inputs.apply" in workflow
 
@@ -48,7 +50,9 @@ def test_bootstrap_is_network_independent_and_approval_gated() -> None:
     assert "tofu-vars" in workflow
     assert "cbiit dev bootstrap" in workflow
     assert "runtime" not in workflow
-    assert "environment: dev-plan" in workflow
-    assert "environment: dev\n" in workflow
+    assert "environment: dev-plan" not in workflow
+    assert workflow.count("environment: dev\n") == 1
+    assert "deployer_role_arn" in workflow
+    assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "if: inputs.apply" in workflow
     assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow

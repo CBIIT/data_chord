@@ -31,20 +31,21 @@ GPT-5.6 Sol for final selection. Newer models can be evaluated separately; do
 not change only the ECS environment and assume the pinned adapter supports
 them.
 
-### Required GitHub environments
+### Required GitHub environment
 
-Create these main-only GitHub Environments in `CBIIT/data_chord`:
+Create one main-only GitHub Environment named `dev` in `CBIIT/data_chord` and
+configure its required reviewers. GitHub Environments represent deployment
+targets, so future peers are `qa`, `staging`, and `prod`; build and plan remain
+workflow jobs rather than additional environments.
 
-| Environment | Purpose | Required configuration |
-| --- | --- | --- |
-| `dev-build` | Push the immutable commit image to ECR | `AWS_ROLE_TO_ASSUME`; existing repository-level GitHub App variable and private-key secret |
-| `dev-plan` | Read AWS state and create a plan | `AWS_ROLE_TO_ASSUME`; no required reviewers |
-| `dev` | Apply the reviewed bootstrap or runtime plan | `AWS_ROLE_TO_ASSUME`; required reviewers |
-
-The role must trust only the exact GitHub OIDC subjects for those environments.
-The build job adds an ECR-only session policy, and plan jobs add the AWS-managed
-`ReadOnlyAccess` session policy. Apply receives the deployment role's normal
-permissions only after the `dev` environment approval.
+The repository-level GitHub App variable and private-key secret continue to
+authorize the private dependency checkout. No AWS role secret is required: the
+workflows derive the stable deployer role ARN from the committed account
+contract. The role trusts only the exact `main` branch OIDC subject for build
+and plan and the exact `dev` environment subject for apply. Build adds an
+ECR-only session policy, plan adds the AWS-managed `ReadOnlyAccess` session
+policy, and apply receives the deployer role's normal bounded permissions only
+after `dev` approval.
 
 ### Bootstrap before the first image
 
@@ -80,7 +81,8 @@ The `Build and deploy DataChord to Cloud One` workflow:
    `CBIIT/agentic_harmonization` dependency during a BuildKit secret mount;
 2. builds or reuses the full Git commit tag in `data-chord-dev` ECR;
 3. resolves that image to its immutable SHA-256 digest;
-4. creates and uploads an exact OpenTofu runtime plan in `dev-plan`;
+4. creates and uploads an exact OpenTofu runtime plan without a deployment
+   environment approval;
 5. waits for approval in `dev` when apply was requested;
 6. applies the same reviewed plan and waits for the private ECS service to
    stabilize.
