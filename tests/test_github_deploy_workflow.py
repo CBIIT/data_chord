@@ -49,6 +49,8 @@ def test_release_applies_only_the_same_run_reviewed_plan() -> None:
     assert "${{ needs.plan.outputs.plan_sha256 }}" in workflow
     assert 'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"' in workflow
     assert 'apply -input=false "../../.plans/dev-runtime.tfplan"' in workflow
+    assert "> .plans/dev-runtime.txt" in workflow
+    assert "> ../../.plans/dev-runtime.txt" not in workflow
     assert "scripts.cloud_one_smoke" in workflow
     assert "aws ecs run-task" in workflow
     assert "tasks-stopped" in workflow
@@ -66,6 +68,8 @@ def test_bootstrap_is_network_independent_and_approval_gated() -> None:
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "if: inputs.apply" in workflow
     assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow
+    assert "> .plans/dev-bootstrap.txt" in workflow
+    assert "> ../../.plans/dev-bootstrap.txt" not in workflow
 
 
 def test_bootstrap_and_release_serialize_the_shared_state() -> None:

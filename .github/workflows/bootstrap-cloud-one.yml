@@ -104,7 +104,7 @@ jobs:
             -var-file="../../.plans/dev-bootstrap.auto.tfvars.json" \
             -out="../../.plans/dev-bootstrap.tfplan"
           tofu -chdir=infra/cloud-one show -no-color "../../.plans/dev-bootstrap.tfplan" \
-            > ../../.plans/dev-bootstrap.txt
+            > .plans/dev-bootstrap.txt
           plan_sha256="$(sha256sum .plans/dev-bootstrap.tfplan | cut -d ' ' -f 1)"
           echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
