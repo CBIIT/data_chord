@@ -127,6 +127,23 @@ jobs:
             --image-ids "imageTag=${GITHUB_SHA}" \
             --query 'imageDetails[0].imageDigest' --output text)"
           test "${digest}" != "None"
+          scan_error="/tmp/data-chord-image-scan.err"
+          for attempt in $(seq 1 12); do
+            if aws ecr describe-image-scan-findings \
+              --repository-name "${repository}" \
+              --image-id "imageDigest=${digest}" >/dev/null 2>"${scan_error}"; then
+              break
+            fi
+            grep -q "ScanNotFoundException" "${scan_error}" || {
+              cat "${scan_error}" >&2
+              exit 1
+            }
+            if [ "${attempt}" -eq 12 ]; then
+              echo "ECR did not expose the scan within 60 seconds." >&2
+              exit 1
+            fi
+            sleep 5
+          done
           aws ecr wait image-scan-complete \
             --repository-name "${repository}" \
             --image-id "imageDigest=${digest}"
