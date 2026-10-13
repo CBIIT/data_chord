@@ -34,6 +34,9 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert "image_digest" in workflow
     assert "image-scan-complete" in workflow
     assert "DescribeImageScanFindings" in workflow
+    assert "ScanNotFoundException" in workflow
+    assert 'for attempt in $(seq 1 12)' in workflow
+    assert "ECR did not expose the scan within 60 seconds." in workflow
     assert '("CRITICAL", "HIGH")' in workflow
     assert "cloud_one_environment.py validate" in workflow
     assert "runtime" in workflow
