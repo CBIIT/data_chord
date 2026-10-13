@@ -249,6 +249,44 @@ jobs:
       - name: Run dependency audit
         run: uv run pip-audit --ignore-vuln CVE-2026-69247
 
+  container:
+    # Build the production image on every trusted change so base-image and
+    # native-wheel compatibility failures are caught before a release run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Create agentic dependency token
+        id: agentic-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: agentic_harmonization
+
+      - name: Build the production container
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
+            --tag data-chord:ci .
+        env:
+          PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
+
+      - name: Smoke-test the production container
+        run: |
+          docker run --rm \
+            --entrypoint python \
+            --env DEV_MODE=true \
+            --env DATA_CHORD_REFERENCE_TABLE=reference \
+            --env DATA_CHORD_HARMONIZATION_CACHE_TABLE=harmonization-cache \
+            --env DATA_CHORD_CDE_RECOMMENDATION_CACHE_TABLE=cde-recommendation-cache \
+            data-chord:ci \
+            -c "import backend.app.main, numpy, pandas, pyarrow; print('container smoke test passed')"
+
   # E2E tests using Playwright with Chromium for browser automation.
   e2e:
     if: >-
