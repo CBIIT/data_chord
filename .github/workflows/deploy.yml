@@ -217,7 +217,7 @@ jobs:
             -var-file="../../.plans/dev.auto.tfvars.json" \
             -out="../../.plans/dev-runtime.tfplan"
           tofu -chdir=infra/cloud-one show -no-color "../../.plans/dev-runtime.tfplan" \
-            > ../../.plans/dev-runtime.txt
+            > .plans/dev-runtime.txt
           plan_sha256="$(sha256sum .plans/dev-runtime.tfplan | cut -d ' ' -f 1)"
           echo "plan_sha256=${plan_sha256}" >> "${GITHUB_OUTPUT}"
 
