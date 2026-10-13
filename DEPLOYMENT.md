@@ -1,16 +1,112 @@
 # Deploy Data Chord
 
-Data Chord has three deployment offers:
+Data Chord has four deployment offers:
 
 | Offer | Data profile | Data Chord creates | Customer creates |
 | --- | --- | --- | --- |
 | Portable | `portable` | One container image | Compute, one `/data` volume, network, TLS, and access control |
 | Customer platform | `hosted` | Workflow S3 storage and three DynamoDB tables | Registry, compute, network, TLS, authentication, logs, and workload roles |
+| Cloud One private dev | `hosted` | ECR, ECS, CloudWatch logs, workflow S3 storage, and three DynamoDB tables | Existing VPC/subnets, GitHub OIDC roles, Bedrock access, and later ingress/authentication |
 | Full AWS | `hosted` | The complete AWS application stack | The account foundation and external prerequisites |
 
 Portable does not use the foundation repository. Customer platform and full
-AWS use the state bucket and deployer role from the foundation handoff. Do not
-use customer platform and full AWS for the same target and stage.
+AWS use the state bucket and deployer role from the foundation handoff. Cloud
+One uses the same foundation outputs through its narrower committed contract.
+Do not use customer platform, Cloud One, and full AWS for the same target and
+stage; their application resource names overlap.
+
+## Cloud One private dev deployment
+
+The initial CBIIT target is `cbiit/dev` in non-production account
+`211125567571`, Region `us-east-1`. It intentionally omits a load balancer,
+Cognito, DNS, certificates, and public ingress. The first service is one
+on-demand Fargate task with 1 vCPU, 4 GiB of memory, the default 20 GiB of
+ephemeral storage, five concurrent agentic workers, and one active job. Keep
+minimum, desired, and maximum task counts at one until request routing and the
+in-memory job lifecycle have been qualified for multiple tasks.
+
+The current application dependency is pinned to GPT-5.6. The deployed image
+therefore uses GPT-5.6 Luna for exploration, shortlisting, and CDE ranking, and
+GPT-5.6 Sol for final selection. Newer models can be evaluated separately; do
+not change only the ECS environment and assume the pinned adapter supports
+them.
+
+### Required GitHub environment
+
+Create one main-only GitHub Environment named `dev` in `CBIIT/data_chord` and
+configure its required reviewers. GitHub Environments represent deployment
+targets, so future peers are `qa`, `staging`, and `prod`; build and plan remain
+workflow jobs rather than additional environments.
+
+The repository-level GitHub App variable and private-key secret continue to
+authorize the private dependency checkout. No AWS role secret is required: the
+workflows derive the stable deployer role ARN from the committed account
+contract. The role trusts only the exact `main` branch OIDC subject for build
+and plan and the exact `dev` environment subject for apply. Build adds an
+ECR-only session policy, plan adds the AWS-managed `ReadOnlyAccess` session
+policy, and apply receives the deployer role's normal bounded permissions only
+after `dev` approval.
+
+### Bootstrap before the first image
+
+The `Bootstrap DataChord Cloud One resources` workflow plans and optionally
+applies the network-independent resources: ECR, S3, DynamoDB, CloudWatch,
+application IAM roles, and the ECS cluster. It uploads the exact binary plan,
+its human-readable rendering, and its SHA-256 digest. The protected apply job
+downloads and applies that same-run plan.
+
+The foundation must exist first. Its expected state bucket is
+`cbiit-datachord-state-211125567571-us-east-1`, and the application state key is
+`datachord/cbiit/dev/cloud-one/tofu.tfstate`.
+
+### Complete the VPC contract
+
+When the VPC request completes, update `environments/cbiit/dev.json` with the
+approved VPC id and at least two private subnet ids. Do not guess these values.
+The subnets need an approved outbound path to ECR, S3, DynamoDB, CloudWatch
+Logs, STS, and Bedrock through NAT or VPC endpoints. The application root does
+not create or alter that path.
+
+The initial security group has no inbound rule. Optional internal CIDR ranges
+can be committed later, but no caller should reach the application until a
+trusted proxy or other approved identity boundary supplies exactly one
+`X-Data-Chord-User-ID` header. `/healthz` remains usable for container health
+without identity.
+
+### Build and release
+
+The `Build and deploy DataChord to Cloud One` workflow:
+
+1. uses the existing GitHub App credential to read the private
+   `CBIIT/agentic_harmonization` dependency during a BuildKit secret mount;
+2. builds or reuses the full Git commit tag in `data-chord-dev` ECR;
+3. waits for the ECR image scan and rejects any critical or high findings;
+4. resolves that image to its immutable SHA-256 digest;
+5. creates and uploads an exact OpenTofu runtime plan without a deployment
+   environment approval;
+6. waits for approval in `dev` when apply was requested;
+7. applies the same reviewed plan and waits for the private ECS service to
+   stabilize; and
+8. runs a one-off task using the deployed task role and private network to
+   round-trip an S3 object, verify all three DynamoDB tables and the populated
+   reference catalog, and call GPT-5.6 Luna and Sol through Bedrock Mantle.
+
+The Docker base images are pinned by tag and immutable registry digest. Update
+the tag and digest together in a reviewed dependency change; never update only
+the tag.
+
+The workflow is manual for the first deployment. Enable automatic releases
+from `main` only after bootstrap, VPC completion, model-access verification,
+reference-data loading, and one successful reviewed dev deployment.
+
+Before release, load an approved reference-data export and verify the private
+subnets have the approved outbound path to ECR, S3, DynamoDB, CloudWatch Logs,
+STS, and Bedrock. The release preflight checks that the configured VPC and
+available subnets exist in this account and Region and span at least two
+Availability Zones; the smoke task proves that the task can use the resulting
+runtime path. Also verify the account is authorized for GPT-5.6 Luna and Sol in
+`us-east-1`, and start with `DATA_CHORD_AGENTIC_WORKERS=5`. Monitor throttles,
+latency, memory, and task restarts before increasing concurrency.
 
 ## Portable container
 
@@ -41,7 +137,7 @@ docker buildx build \
 ```
 
 The GitHub account must have read access to the private
-`netrias/agentic_harmonization` repository. The token is a build secret and is
+`CBIIT/agentic_harmonization` repository. The token is a build secret and is
 not stored in an image layer.
 
 ### Load reference data
@@ -282,6 +378,14 @@ Load and verify the approved reference data with the command in section 6
 before you expose the service. Use a separate customer-owned loader role and
 the table name from `runtime_environment`.
 
+### Customer-platform automation status
+
+The customer-platform root and its local plan/deploy commands remain supported
+for providers that own their compute platform. The CBIIT GitHub workflow now
+targets the Cloud One private-dev root described above because CBIIT selected
+ECR and ECS as part of the DataChord deployment. Do not run the older BDF
+`staging` environment contract against the CBIIT non-production account.
+
 ## Full AWS deployment
 
 The rest of this guide describes the full AWS offer. It uses one complete
@@ -302,7 +406,7 @@ Replace these values with the values for your environment.
 ## 1. Prepare AWS
 
 Create the AWS foundation first. Follow the
-[foundation deployment guide](https://github.com/netrias/datachord-infrastructure/blob/main/DEPLOYMENT.md).
+[foundation deployment guide](https://github.com/CBIIT/datachord-infrastructure/blob/main/DEPLOYMENT.md).
 Keep the handoff file in the foundation repository:
 
 ```text
@@ -314,12 +418,12 @@ Prepare these account resources before the first application plan:
 - A public Route 53 hosted zone with working DNS delegation. The example uses
   `apps.example.org`.
 - A CodeConnections GitHub connection in `us-east-2`. Give the connection read
-  access to `netrias/data_chord`, then register it as the default GitHub source
+  access to `CBIIT/data_chord`, then register it as the default GitHub source
   credential for CodeBuild. Follow the AWS
   [GitHub App connection procedure](https://docs.aws.amazon.com/codebuild/latest/userguide/connections-github-app.html).
 - A Secrets Manager secret named `data-chord/build/github-app`. Its JSON value
   must contain `app_id`, `installation_id`, and `private_key`. The GitHub App
-  must have read access to the private `netrias/agentic_harmonization`
+  must have read access to the private `CBIIT/agentic_harmonization`
   repository. The build also downloads the public `netrias/netrias_client`
   repository. Follow the AWS
   [secret creation procedure](https://docs.aws.amazon.com/secretsmanager/latest/userguide/create_secret.html)
@@ -345,11 +449,11 @@ Install Git, the GitHub CLI, Python 3.13 or later,
 CLI, and OpenTofu 1.10 or later.
 
 Your GitHub account needs read access to Data Chord and
-`netrias/agentic_harmonization`. The install also downloads the public
+`CBIIT/agentic_harmonization`. The install also downloads the public
 `netrias/netrias_client` repository. Then run:
 
 ```bash
-git clone https://github.com/netrias/data_chord.git
+git clone https://github.com/CBIIT/data_chord.git
 cd data_chord
 gh auth status
 gh auth setup-git
@@ -392,7 +496,7 @@ looks like this:
   "application_role_path": "/application/",
   "domain_name": "data-chord-staging.apps.example.org",
   "hosted_zone_name": "apps.example.org",
-  "application_repository_url": "https://github.com/netrias/data_chord.git",
+  "application_repository_url": "https://github.com/CBIIT/data_chord.git",
   "github_app_secret_name": "data-chord/build/github-app",
   "programmatic_api_key_secret_name": "data-chord/staging/programmatic-api-key"
 }

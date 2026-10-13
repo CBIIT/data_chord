@@ -63,20 +63,20 @@ users who have:
 - Git, the [GitHub CLI](https://cli.github.com/), and
   [uv](https://docs.astral.sh/uv/);
 - Python 3.13 or later;
-- read access to `netrias/data_chord` and the private
-  `netrias/agentic_harmonization` repository;
+- read access to `CBIIT/data_chord` and the private
+  `CBIIT/agentic_harmonization` repository;
 - AWS credentials that can use the required Amazon Bedrock models, read the
   reference-data table, and read and write the two cache tables; and
 - one populated reference-data table and two DynamoDB cache tables. The cache
   tables can start empty.
 
 Authenticate Git, clone the repository, and select a version from the
-[repository tags](https://github.com/netrias/data_chord/tags):
+[repository tags](https://github.com/CBIIT/data_chord/tags):
 
 ```bash
 gh auth status
 gh auth setup-git
-git clone https://github.com/netrias/data_chord.git
+git clone https://github.com/CBIIT/data_chord.git
 cd data_chord
 git checkout vX.Y.Z
 uv sync --frozen
