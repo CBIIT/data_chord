@@ -18,7 +18,10 @@ def test_release_uses_jobs_for_build_and_plan_and_one_dev_environment() -> None:
     assert "deployer_role_arn" in workflow
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
-    assert "if: inputs.apply" in workflow
+    assert "publish_only:" in workflow
+    assert 'test "${APPLY}:${PUBLISH_ONLY}" != "true:true"' in workflow
+    assert "if: ${{ !inputs.publish_only }}" in workflow
+    assert "if: ${{ inputs.apply && !inputs.publish_only }}" in workflow
 
 
 def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
@@ -34,7 +37,11 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert '("CRITICAL", "HIGH")' in workflow
     assert "cloud_one_environment.py validate" in workflow
     assert "runtime" in workflow
-    assert workflow.index("cbiit dev network") < workflow.index("\n  build:\n")
+    assert "cbiit dev network" not in workflow
+    assert workflow.index("\n  build:\n") < workflow.index("\n  plan:\n")
+    assert workflow.index("\n  plan:\n") < workflow.index("Require the completed VPC contract")
+    assert "Write image publication summary" in workflow
+    assert "steps.image.outputs.image_uri" in workflow
     assert "Verify VPC and subnet ownership" in workflow
     assert "AvailabilityZone" in workflow
 

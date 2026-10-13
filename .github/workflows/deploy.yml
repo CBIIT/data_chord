@@ -1,12 +1,17 @@
 name: Build and deploy DataChord to Cloud One
 
 run-name: >-
-  ${{ inputs.apply && 'Build and deploy' || 'Build and plan' }} DataChord
+  ${{ inputs.publish_only && 'Publish image' || inputs.apply && 'Build and deploy' || 'Build and plan' }} DataChord
   (cbiit/dev)
 
 on:
   workflow_dispatch:
     inputs:
+      publish_only:
+        description: Build, scan, and publish the image without planning the ECS runtime
+        required: true
+        default: false
+        type: boolean
       apply:
         description: Wait for dev approval and apply this run's reviewed ECS plan
         required: true
@@ -34,10 +39,16 @@ jobs:
     steps:
       - name: Require main for every privileged run
         env:
+          APPLY: ${{ inputs.apply }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
           REQUESTED_REF: ${{ github.ref }}
         run: |
           test "${REQUESTED_REF}" = "refs/heads/main" || {
             echo "Cloud One releases must run from main." >&2
+            exit 1
+          }
+          test "${APPLY}:${PUBLISH_ONLY}" != "true:true" || {
+            echo "publish_only and apply cannot both be enabled." >&2
             exit 1
           }
 
@@ -49,7 +60,6 @@ jobs:
         run: |
           config="environments/cbiit/dev.json"
           python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev
-          python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev network
           {
             echo "account_id=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id)"
             echo "deployer_role_arn=arn:aws:iam::$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id):role/foundation/cbiit-datachord-deployer"
@@ -136,8 +146,19 @@ jobs:
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
+      - name: Write image publication summary
+        run: |
+          {
+            echo "## DataChord dev image"
+            echo
+            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Image:** \`${{ steps.image.outputs.image_uri }}\`"
+            echo "- **Publish only:** ${{ inputs.publish_only }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   plan:
     name: Plan cbiit/dev runtime
+    if: ${{ !inputs.publish_only }}
     needs: [preflight, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -247,7 +268,7 @@ jobs:
 
   apply:
     name: Apply reviewed cbiit/dev runtime plan
-    if: inputs.apply
+    if: ${{ inputs.apply && !inputs.publish_only }}
     needs: [preflight, build, plan]
     runs-on: ubuntu-latest
     timeout-minutes: 45
