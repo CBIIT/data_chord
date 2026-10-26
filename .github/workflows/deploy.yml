@@ -118,6 +118,7 @@ jobs:
             --repository-name "${repository}" \
             --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
             DOCKER_BUILDKIT=1 docker build \
+              --provenance=false \
               --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
               --tag "${image_uri}:${GITHUB_SHA}" .
             docker push "${image_uri}:${GITHUB_SHA}"

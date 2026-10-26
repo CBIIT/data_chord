@@ -273,6 +273,7 @@ jobs:
       - name: Build the production container
         run: |
           DOCKER_BUILDKIT=1 docker build \
+            --provenance=false \
             --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
             --tag data-chord:ci .
         env:

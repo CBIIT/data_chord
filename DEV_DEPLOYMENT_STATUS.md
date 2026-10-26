@@ -54,6 +54,14 @@ the release advances or a new issue is found.
   Plan and apply were skipped, so no runtime resources changed. The scoped
   build session was missing `ecr:BatchGetImage`; the follow-up adds only that
   repository-level read action.
+- GitHub Actions run `40389486957` passed preflight, built the production image
+  from merged commit `81a7c00`, and published OCI index digest
+  `sha256:4600955d6b7e2ff1d6b8507bba5fafb3a8dd2fb257e50d0acaf2e6046e02f7cc`.
+  ECR did not expose basic scan findings for that OCI index within the guarded
+  60-second window, so plan and apply were again skipped. The follow-up disables
+  BuildKit provenance for the deployable image so ECR receives a directly
+  scannable single-platform image manifest; the ECR vulnerability gate remains
+  mandatory.
 
 ## Open issues and follow-up
 

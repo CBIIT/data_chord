@@ -30,6 +30,7 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
 
     assert "actions/create-github-app-token@" in workflow
     assert "repositories: agentic_harmonization" in workflow
+    assert "--provenance=false" in workflow
     assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
     assert "imageTag=${GITHUB_SHA}" in workflow
     assert "image_digest" in workflow
@@ -105,6 +106,7 @@ def test_release_base_images_are_pinned_by_digest() -> None:
 def test_ci_builds_and_smoke_tests_the_production_container() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
+    assert "--provenance=false" in workflow
     assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
     assert "--tag data-chord:ci" in workflow
     assert "import backend.app.main, numpy, pandas, pyarrow" in workflow
