@@ -100,7 +100,7 @@ def test_release_base_images_are_pinned_by_digest() -> None:
     assert all("@sha256:" in line for line in from_lines)
     assert dockerfile.count("public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261016.0-minimal@sha256:") == 2
     assert "python:3.13-slim-bookworm" not in dockerfile
-    assert dockerfile.count("--releasever=latest --setopt=install_weak_deps=False") == 2
+    assert dockerfile.count("dnf install -y --releasever=latest") == 2
     for patched_rpm in (
         "python3.13-3.13.16-1.amzn2023.0.1",
         "openssl-libs-3.5.8-1.amzn2023.0.3",

@@ -13,7 +13,7 @@ ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
-RUN dnf install -y --releasever=latest --setopt=install_weak_deps=False \
+RUN dnf install -y --releasever=latest \
         git \
         python3.13-3.13.16-1.amzn2023.0.1 \
         python3.13-libs-3.13.16-1.amzn2023.0.1 \
@@ -38,7 +38,7 @@ RUN --mount=type=secret,id=github_token \
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261016.0-minimal@sha256:db31805b873599314c8b7cf394ccf8ba798c07361f0d773fdeb8efb48a02ecac AS runtime
 
-RUN dnf install -y --releasever=latest --setopt=install_weak_deps=False \
+RUN dnf install -y --releasever=latest \
         libstdc++ \
         python3.13-3.13.16-1.amzn2023.0.1 \
         python3.13-libs-3.13.16-1.amzn2023.0.1 \
