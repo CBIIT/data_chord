@@ -1,0 +1,64 @@
+# DataChord dev deployment status
+
+This is the working record for the first `cbiit/dev` deployment. Update it as
+the release advances or a new issue is found.
+
+## Target
+
+- Date started: 2026-10-26
+- AWS account: `211125567571` (`NIH.NCI.CBIIT.CRDC-DATA-MGMT.NONPROD`)
+- Region: `us-east-1`
+- VPC: `vpc-29a12251` (`vpc-dev-us-east-1`)
+- Private ECS subnets: `subnet-4f35f112` and `subnet-409a0424`
+- Deployment profile: private dev, one Fargate task, no load balancer or public ingress
+
+## Verified before runtime deployment
+
+- The foundation state bucket and Cloud One bootstrap have already been deployed.
+- ECR, the ECS cluster, CloudWatch log group, S3 workflow bucket, application
+  IAM roles, and three DynamoDB tables have been created.
+- The two selected private web-application subnets are available, belong to the
+  dev VPC, span two Availability Zones, and do not assign public IP addresses.
+- The shared route table sends `0.0.0.0/0` through the Cloud One transit gateway
+  and includes an S3 VPC endpoint.
+- `data-chord-dev-reference-data` is active with deletion protection and PITR,
+  but contained zero items when checked on 2026-10-26.
+
+## Changes prepared for this deployment
+
+- Record the confirmed VPC and private subnet IDs in
+  `environments/cbiit/dev.json`.
+- Move the runtime image to a pinned Amazon Linux 2023 base and update affected
+  JavaScript dependencies so the ECR critical/high vulnerability gate can pass.
+- Add a container build and smoke check to CI.
+
+## Open issues and follow-up
+
+1. **Reference data is empty.** Load the committed synthetic demo catalog for
+   this no-user dev proof, or replace it with an approved canonical catalog,
+   before the final runtime smoke test.
+2. **Private egress is not yet proven from Fargate.** The route-table inspection
+   is encouraging, but the deployment smoke task is the authoritative check for
+   ECR, S3, DynamoDB, CloudWatch Logs, STS, and Bedrock reachability.
+3. **Bedrock model access is unverified.** The smoke task must confirm access to
+   GPT-5.6 Luna and GPT-5.6 Sol in `us-east-1`.
+4. **The requested DataChord-specific AWS accounts are not visible in the AWS
+   access portal.** This first deployment therefore uses the existing CRDC Data
+   Management non-production account listed above. Migration to account
+   `701016785834` requires access and a separately bootstrapped environment.
+5. **The VPC is shared.** Its owner is AWS account `019211168375`; DataChord can
+   deploy workloads into the shared subnets but does not manage the underlying
+   network.
+6. **There is no user login endpoint yet.** The initial service has no load
+   balancer, public ingress, Cognito, DNS, or TLS endpoint. Successful deployment
+   proves the private runtime and its dependencies, not end-user access.
+
+## Release checkpoints
+
+- [ ] Configuration and vulnerability-remediation changes merged to `main`
+- [ ] Immutable application image published and ECR scan gate passed
+- [ ] Exact OpenTofu runtime plan created and reviewed
+- [ ] Dev reference catalog populated
+- [ ] Runtime plan applied through the protected `dev` GitHub environment
+- [ ] ECS service stable at one desired task
+- [ ] S3, DynamoDB, reference catalog, and Bedrock smoke checks passed
