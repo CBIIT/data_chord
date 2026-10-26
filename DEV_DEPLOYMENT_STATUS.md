@@ -21,8 +21,11 @@ the release advances or a new issue is found.
   dev VPC, span two Availability Zones, and do not assign public IP addresses.
 - The shared route table sends `0.0.0.0/0` through the Cloud One transit gateway
   and includes an S3 VPC endpoint.
-- `data-chord-dev-reference-data` is active with deletion protection and PITR,
-  but contained zero items when checked on 2026-10-26.
+- `data-chord-dev-reference-data` is active with deletion protection and PITR.
+  It initially contained zero items. The committed synthetic demo catalog was
+  loaded as one atomic, conditional transaction and then verified with three
+  catalog rows and 13 total rows. Its source SHA-256 is
+  `13c6e8da5368f8cf0257386b805b2832f7c2ec6d5feb217216f31cf0c38609fa`.
 
 ## Changes prepared for this deployment
 
@@ -34,9 +37,10 @@ the release advances or a new issue is found.
 
 ## Open issues and follow-up
 
-1. **Reference data is empty.** Load the committed synthetic demo catalog for
-   this no-user dev proof, or replace it with an approved canonical catalog,
-   before the final runtime smoke test.
+1. **The current reference data is synthetic.** It is sufficient for this
+   no-user dev proof and the deployment smoke test, but must be replaced or
+   superseded by an approved canonical catalog before real users or data are
+   introduced.
 2. **Private egress is not yet proven from Fargate.** The route-table inspection
    is encouraging, but the deployment smoke task is the authoritative check for
    ECR, S3, DynamoDB, CloudWatch Logs, STS, and Bedrock reachability.
@@ -58,7 +62,7 @@ the release advances or a new issue is found.
 - [ ] Configuration and vulnerability-remediation changes merged to `main`
 - [ ] Immutable application image published and ECR scan gate passed
 - [ ] Exact OpenTofu runtime plan created and reviewed
-- [ ] Dev reference catalog populated
+- [x] Dev reference catalog populated with the synthetic demo standard
 - [ ] Runtime plan applied through the protected `dev` GitHub environment
 - [ ] ECS service stable at one desired task
 - [ ] S3, DynamoDB, reference catalog, and Bedrock smoke checks passed
