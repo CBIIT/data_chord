@@ -98,9 +98,19 @@ def test_release_base_images_are_pinned_by_digest() -> None:
 
     assert len(from_lines) == 3
     assert all("@sha256:" in line for line in from_lines)
-    assert dockerfile.count("public.ecr.aws/amazonlinux/amazonlinux:2023.12.20260831.0-minimal@sha256:") == 2
+    assert dockerfile.count("public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261016.0-minimal@sha256:") == 2
     assert "python:3.13-slim-bookworm" not in dockerfile
-    assert "dnf install -y libstdc++ python3.13" in dockerfile
+    assert dockerfile.count("dnf install -y --releasever=latest") == 2
+    for patched_rpm in (
+        "python3.13-3.13.16-1.amzn2023.0.1",
+        "openssl-libs-3.5.8-1.amzn2023.0.3",
+        "pcre2-10.40-1.amzn2023.0.5",
+        "expat-2.8.3-1.amzn2023.0.1",
+        "rpm-4.16.1.3-29.amzn2023.0.8",
+        "libcurl-minimal-8.21.0-5.amzn2023.0.3",
+        "libcap-2.73-1.amzn2023.0.8",
+    ):
+        assert patched_rpm in dockerfile
 
 
 def test_ci_builds_and_smoke_tests_the_production_container() -> None:
