@@ -37,7 +37,7 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert "image-scan-complete" in workflow
     assert "DescribeImageScanFindings" in workflow
     assert "ScanNotFoundException" in workflow
-    assert 'for attempt in $(seq 1 12)' in workflow
+    assert "for attempt in $(seq 1 12)" in workflow
     assert "ECR did not expose the scan within 60 seconds." in workflow
     assert '("CRITICAL", "HIGH")' in workflow
     assert "cloud_one_environment.py validate" in workflow
@@ -49,6 +49,7 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert "steps.image.outputs.image_uri" in workflow
     assert "Verify VPC and subnet ownership" in workflow
     assert "AvailabilityZone" in workflow
+    assert "MapPublicIpOnLaunch" in workflow
 
 
 def test_release_applies_only_the_same_run_reviewed_plan() -> None:
@@ -66,6 +67,8 @@ def test_release_applies_only_the_same_run_reviewed_plan() -> None:
     assert "scripts.cloud_one_smoke" in workflow
     assert "aws ecs run-task" in workflow
     assert "tasks-stopped" in workflow
+    assert "target-in-service" in workflow
+    assert "internal_dev_preview_url" in workflow
 
 
 def test_bootstrap_is_network_independent_and_approval_gated() -> None:

@@ -14,6 +14,7 @@ def _document() -> dict[str, object]:
         "application_role_boundary_arn": ("arn:aws:iam::211125567571:policy/cbiit-datachord-application-role-boundary"),
         "application_role_path": "/application/",
         "ingress_cidr_blocks": [],
+        "internal_dev_preview_enabled": False,
         "private_subnet_ids": [],
         "region": "us-east-1",
         "schema_version": 1,
@@ -66,19 +67,39 @@ def test_runtime_renders_only_after_exact_network_and_digest(tmp_path: Path) -> 
         "subnet-0123456789abcdef0",
         "subnet-0fedcba9876543210",
     ]
+    document["ingress_cidr_blocks"] = ["10.208.0.0/21"]
+    document["internal_dev_preview_enabled"] = True
     environment = _environment(tmp_path, document)
     digest = "sha256:" + "b" * 64
 
     network = _run("validate", environment, "cbiit", "dev", "network")
+    bootstrap = _run("tofu-vars", environment, "cbiit", "dev", "bootstrap")
     result = _run("tofu-vars", environment, "cbiit", "dev", "runtime", digest)
 
     assert network.returncode == 0, network.stderr
+    assert bootstrap.returncode == 0, bootstrap.stderr
+    assert json.loads(bootstrap.stdout)["internal_dev_preview_enabled"] is False
     assert result.returncode == 0, result.stderr
     variables = json.loads(result.stdout)
     assert variables["runtime_enabled"] is True
     assert variables["image_digest"] == digest
     assert variables["expected_account_id"] == "211125567571"
     assert variables["aws_region"] == "us-east-1"
+    assert variables["internal_dev_preview_enabled"] is True
+
+
+def test_internal_preview_is_dev_only_and_requires_an_ingress_cidr(tmp_path: Path) -> None:
+    document = _document()
+    document["internal_dev_preview_enabled"] = True
+
+    missing_cidr = _run("validate", _environment(tmp_path, document), "cbiit", "dev")
+    non_dev_document = {**document, "ingress_cidr_blocks": ["10.0.0.0/8"]}
+    non_dev = _run("validate", _environment(tmp_path, non_dev_document), "cbiit", "qa")
+
+    assert missing_cidr.returncode == 2
+    assert "requires at least one ingress_cidr_blocks" in missing_cidr.stderr
+    assert non_dev.returncode == 2
+    assert "restricted to dev" in non_dev.stderr
 
 
 def test_environment_contract_rejects_unknown_fields(tmp_path: Path) -> None:

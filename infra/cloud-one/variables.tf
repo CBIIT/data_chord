@@ -96,9 +96,15 @@ variable "private_subnet_ids" {
 }
 
 variable "ingress_cidr_blocks" {
-  description = "Optional internal CIDR ranges allowed to reach port 8000. Empty keeps the task health-check-only."
+  description = "Internal CIDR ranges allowed to reach the dev preview load balancer. Empty keeps the runtime health-check-only."
   type        = list(string)
   default     = []
+}
+
+variable "internal_dev_preview_enabled" {
+  description = "Whether to expose the dev service through an internal HTTP ALB with temporary shared dev identity."
+  type        = bool
+  default     = false
 }
 
 variable "container_cpu" {

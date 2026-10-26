@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import sys
@@ -15,6 +16,7 @@ _FIELDS = {
     "application_role_boundary_arn",
     "application_role_path",
     "ingress_cidr_blocks",
+    "internal_dev_preview_enabled",
     "private_subnet_ids",
     "region",
     "schema_version",
@@ -41,6 +43,7 @@ class Environment:
     application_role_boundary_arn: str
     application_role_path: str
     ingress_cidr_blocks: tuple[str, ...]
+    internal_dev_preview_enabled: bool
     private_subnet_ids: tuple[str, ...]
     region: str
     state_bucket_name: str
@@ -62,6 +65,7 @@ class Environment:
             "expected_account_id": self.account_id,
             "image_digest": image_digest,
             "ingress_cidr_blocks": list(self.ingress_cidr_blocks),
+            "internal_dev_preview_enabled": self.internal_dev_preview_enabled if runtime_enabled else False,
             "private_subnet_ids": list(self.private_subnet_ids),
             "runtime_enabled": runtime_enabled,
             "vpc_id": self.vpc_id,
@@ -90,6 +94,7 @@ def load(path: Path, target: str, stage: str) -> Environment:
         application_role_boundary_arn=_string(document, "application_role_boundary_arn"),
         application_role_path=_string(document, "application_role_path"),
         ingress_cidr_blocks=_strings(document, "ingress_cidr_blocks"),
+        internal_dev_preview_enabled=_boolean(document, "internal_dev_preview_enabled"),
         private_subnet_ids=_strings(document, "private_subnet_ids"),
         region=_string(document, "region"),
         state_bucket_name=_string(document, "state_bucket_name"),
@@ -120,6 +125,25 @@ def _validate(environment: Environment) -> None:
         raise ConfigurationError(f"invalid private subnet id: {invalid_subnets[0]}")
     if len(set(environment.private_subnet_ids)) != len(environment.private_subnet_ids):
         raise ConfigurationError("private_subnet_ids must not contain duplicates")
+    _validate_ingress_cidrs(environment.ingress_cidr_blocks)
+    _validate_internal_preview(environment)
+
+
+def _validate_internal_preview(environment: Environment) -> None:
+    if environment.internal_dev_preview_enabled and environment.stage != "dev":
+        raise ConfigurationError("internal_dev_preview_enabled is restricted to dev")
+    if environment.internal_dev_preview_enabled and not environment.ingress_cidr_blocks:
+        raise ConfigurationError("internal dev preview requires at least one ingress_cidr_blocks entry")
+
+
+def _validate_ingress_cidrs(cidrs: tuple[str, ...]) -> None:
+    for cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(cidr, strict=True)
+        except ValueError as exc:
+            raise ConfigurationError(f"invalid ingress CIDR: {cidr}") from exc
+        if network.version != 4:
+            raise ConfigurationError(f"ingress CIDR must be IPv4: {cidr}")
 
 
 def require_network(environment: Environment) -> None:
@@ -166,6 +190,13 @@ def _strings(document: dict[str, object], key: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigurationError(f"{key} must be a list of strings")
     return tuple(value)
+
+
+def _boolean(document: dict[str, object], key: str) -> bool:
+    value = document.get(key)
+    if not isinstance(value, bool):
+        raise ConfigurationError(f"{key} must be a boolean")
+    return value
 
 
 def _parser() -> argparse.ArgumentParser:
