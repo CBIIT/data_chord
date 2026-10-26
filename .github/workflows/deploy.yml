@@ -100,7 +100,7 @@ jobs:
           aws-region: ${{ needs.preflight.outputs.region }}
           allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
           inline-session-policy: >-
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
 
       - name: Build or reuse the commit image
         id: image

@@ -46,6 +46,15 @@ the release advances or a new issue is found.
   `2026.10.19` and setuptools `84.2.1`. The fixed cutoffs do not admit later
   releases and are scheduled for removal after 2026-10-27T19:02:00Z.
 
+## Deployment attempts
+
+- GitHub Actions run `40387666095` passed preflight and built the production
+  image from merged commit `5dbcbd8`. It uploaded every image layer, then ECR
+  rejected Docker's final referenced-manifest lookup with `403 Forbidden`.
+  Plan and apply were skipped, so no runtime resources changed. The scoped
+  build session was missing `ecr:BatchGetImage`; the follow-up adds only that
+  repository-level read action.
+
 ## Open issues and follow-up
 
 1. **The current reference data is synthetic.** It is sufficient for this
