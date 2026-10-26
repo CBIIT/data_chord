@@ -21,6 +21,9 @@ the release advances or a new issue is found.
   dev VPC, span two Availability Zones, and do not assign public IP addresses.
 - The shared route table sends `0.0.0.0/0` through the Cloud One transit gateway
   and includes an S3 VPC endpoint.
+- The Bedrock catalog contains GPT-5.6 Luna and GPT-5.6 Sol, and both corresponding
+  US inference profiles report `ACTIVE`. Runtime invocation by the ECS task role
+  remains part of the deployment smoke test.
 - `data-chord-dev-reference-data` is active with deletion protection and PITR.
   It initially contained zero items. The committed synthetic demo catalog was
   loaded as one atomic, conditional transaction and then verified with three
@@ -34,6 +37,11 @@ the release advances or a new issue is found.
 - Move the runtime image to a pinned Amazon Linux 2023 base and update affected
   JavaScript dependencies so the ECR critical/high vulnerability gate can pass.
 - Add a container build and smoke check to CI.
+- Pin the Playwright E2E job to Ubuntu 24.04 after GitHub's `ubuntu-latest`
+  image advanced to unsupported Ubuntu 26.04.
+- Raise the audited Python dependency floors for `certifi`, `filelock`, and
+  `virtualenv`; explicitly record the temporary non-runtime `setuptools`
+  exception described below.
 
 ## Open issues and follow-up
 
@@ -56,6 +64,11 @@ the release advances or a new issue is found.
 6. **There is no user login endpoint yet.** The initial service has no load
    balancer, public ingress, Cognito, DNS, or TLS endpoint. Successful deployment
    proves the private runtime and its dependencies, not end-user access.
+7. **One audit exception is time-limited.** `setuptools` is present only through
+   the optional local-inference test extra and is not installed in the deployed
+   Bedrock image. Its fix for `GHSA-xmj3-9gf7-h52w` is still inside the enforced
+   seven-day package quarantine. CI records an explicit exception through
+   2026-10-27; update the lock and remove it once the fixed release is eligible.
 
 ## Release checkpoints
 
