@@ -39,9 +39,12 @@ the release advances or a new issue is found.
 - Add a container build and smoke check to CI.
 - Pin the Playwright E2E job to Ubuntu 24.04 after GitHub's `ubuntu-latest`
   image advanced to unsupported Ubuntu 26.04.
-- Raise the audited Python dependency floors for `certifi`, `filelock`, and
-  `virtualenv`; explicitly record the temporary non-runtime `setuptools`
-  exception described below.
+- Raise the audited Python dependency floors for `certifi`, `filelock`,
+  `setuptools`, and `virtualenv`, and update all build paths to the uv release
+  that removes the compromised emSign trust root.
+- Apply the approved, exact-artifact package-age exceptions for certifi
+  `2026.10.19` and setuptools `84.2.1`. The fixed cutoffs do not admit later
+  releases and are scheduled for removal after 2026-10-27T19:02:00Z.
 
 ## Open issues and follow-up
 
@@ -64,11 +67,6 @@ the release advances or a new issue is found.
 6. **There is no user login endpoint yet.** The initial service has no load
    balancer, public ingress, Cognito, DNS, or TLS endpoint. Successful deployment
    proves the private runtime and its dependencies, not end-user access.
-7. **One audit exception is time-limited.** `setuptools` is present only through
-   the optional local-inference test extra and is not installed in the deployed
-   Bedrock image. Its fix for `GHSA-xmj3-9gf7-h52w` is still inside the enforced
-   seven-day package quarantine. CI records an explicit exception through
-   2026-10-27; update the lock and remove it once the fixed release is eligible.
 
 ## Release checkpoints
 

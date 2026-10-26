@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Security: keep uv pinned so dependency age enforcement stays stable in container builds.
-FROM ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc AS uv
+FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv
 
 # Amazon Linux 2023 is the deployment platform's maintained, minimal base.
 # Pin the dated AL2023 release and its multi-architecture manifest digest so

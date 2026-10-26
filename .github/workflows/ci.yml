@@ -104,7 +104,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -141,7 +141,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -178,7 +178,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -230,7 +230,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -247,14 +247,9 @@ jobs:
         run: uv run bandit -r src/ -c pyproject.toml
 
       - name: Run dependency audit
-        # GHSA-xmj3-9gf7-h52w affects setuptools pulled only by the optional
-        # local-inference extra. The deployed Bedrock image excludes that extra,
-        # and the fixed setuptools release is still inside our seven-day
-        # supply-chain quarantine. Remove this exception after 2026-10-27.
         run: >-
           uv run pip-audit
           --ignore-vuln CVE-2026-69247
-          --ignore-vuln GHSA-xmj3-9gf7-h52w
 
   container:
     # Build the production image on every trusted change so base-image and
@@ -318,7 +313,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
