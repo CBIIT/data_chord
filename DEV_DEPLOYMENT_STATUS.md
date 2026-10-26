@@ -71,6 +71,26 @@ the release advances or a new issue is found.
   follow-up advances both pinned image stages from AL2023 `2023.12.20260831` to
   the immutable `2023.12.20261016` release and pins the patched RPM builds from
   the live AL2023 repository instead of weakening the scan gate.
+- GitHub Actions run `40393405239` published image digest
+  `sha256:7452b0358fb5bab1a672a2ec9f2aba667a5aece2eaa62f07de709f1ccdbed31d`,
+  passed the ECR vulnerability gate with no critical or high findings, and
+  applied the first runtime plan. OpenTofu added the service security group,
+  task definition `data-chord-dev:1`, and ECS service. The service stabilized
+  at one task, but the final smoke task stopped at its first Bedrock invocation:
+  the account had not yet accepted the AWS Marketplace subscription used by
+  the selected OpenAI models. The ECS task role was deliberately not granted
+  Marketplace subscription permissions. An administrator instead established
+  account-level access by successfully invoking both selected US inference
+  profiles. A failed-job rerun correctly refused to reuse the now-stale saved
+  plan after the successful state change.
+- GitHub Actions run [`40395043600`](https://github.com/CBIIT/data_chord/actions/runs/40395043600)
+  completed the release end to end from merged commit `d9ee33a`. It reused the
+  exact immutable image above, passed the ECR scan, created fresh reviewed plan
+  SHA-256 `cf8ff6504816766a3c340d71da83c77af9d07fe8eff37191a7391867782ee5e1`,
+  and applied it with zero infrastructure changes. The ECS service remained
+  stable at one running task. The live Fargate smoke task exited successfully,
+  proving the application task role, private-network egress, S3, DynamoDB,
+  reference catalog, and both GPT-5.6 inference profiles.
 
 ## Open issues and follow-up
 
@@ -78,28 +98,27 @@ the release advances or a new issue is found.
    no-user dev proof and the deployment smoke test, but must be replaced or
    superseded by an approved canonical catalog before real users or data are
    introduced.
-2. **Private egress is not yet proven from Fargate.** The route-table inspection
-   is encouraging, but the deployment smoke task is the authoritative check for
-   ECR, S3, DynamoDB, CloudWatch Logs, STS, and Bedrock reachability.
-3. **Bedrock model access is unverified.** The smoke task must confirm access to
-   GPT-5.6 Luna and GPT-5.6 Sol in `us-east-1`.
-4. **The requested DataChord-specific AWS accounts are not visible in the AWS
+2. **The requested DataChord-specific AWS accounts are not visible in the AWS
    access portal.** This first deployment therefore uses the existing CRDC Data
    Management non-production account listed above. Migration to account
    `701016785834` requires access and a separately bootstrapped environment.
-5. **The VPC is shared.** Its owner is AWS account `019211168375`; DataChord can
+3. **The VPC is shared.** Its owner is AWS account `019211168375`; DataChord can
    deploy workloads into the shared subnets but does not manage the underlying
    network.
-6. **There is no user login endpoint yet.** The initial service has no load
+4. **There is no user login endpoint yet.** The initial service has no load
    balancer, public ingress, Cognito, DNS, or TLS endpoint. Successful deployment
    proves the private runtime and its dependencies, not end-user access.
+5. **Two third-party Actions still target deprecated Node.js 20.** GitHub forced
+   `actions/create-github-app-token` and the artifact upload/download actions to
+   Node.js 24 during this release. The run passed, but their pinned versions
+   should be advanced when compatible releases are available.
 
 ## Release checkpoints
 
-- [ ] Configuration and vulnerability-remediation changes merged to `main`
-- [ ] Immutable application image published and ECR scan gate passed
-- [ ] Exact OpenTofu runtime plan created and reviewed
+- [x] Configuration and vulnerability-remediation changes merged to `main`
+- [x] Immutable application image published and ECR scan gate passed
+- [x] Exact OpenTofu runtime plan created and reviewed
 - [x] Dev reference catalog populated with the synthetic demo standard
-- [ ] Runtime plan applied through the protected `dev` GitHub environment
-- [ ] ECS service stable at one desired task
-- [ ] S3, DynamoDB, reference catalog, and Bedrock smoke checks passed
+- [x] Runtime plan applied through the protected `dev` GitHub environment
+- [x] ECS service stable at one desired task
+- [x] S3, DynamoDB, reference catalog, and Bedrock smoke checks passed
