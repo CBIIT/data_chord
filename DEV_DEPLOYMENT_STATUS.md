@@ -62,6 +62,15 @@ the release advances or a new issue is found.
   BuildKit provenance for the deployable image so ECR receives a directly
   scannable single-platform image manifest; the ECR vulnerability gate remains
   mandatory.
+- GitHub Actions run `40390606889` passed preflight, published directly
+  scannable image digest
+  `sha256:c60620690d2ce462aa04ad75aa67826ca883f3b75ffa2c4b20896c183115c7fc`,
+  and completed the ECR scan. The scan correctly blocked plan and apply after
+  reporting zero critical and 33 high findings, all in Amazon Linux RPMs. A
+  live repository check showed newer builds for every affected package, so the
+  follow-up advances both pinned image stages from AL2023 `2023.12.20260831` to
+  the immutable `2023.12.20261016` release and pins the patched RPM builds from
+  the live AL2023 repository instead of weakening the scan gate.
 
 ## Open issues and follow-up
 
