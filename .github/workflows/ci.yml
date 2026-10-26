@@ -104,7 +104,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -141,7 +141,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -178,7 +178,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -230,7 +230,7 @@ jobs:
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -247,10 +247,13 @@ jobs:
         run: uv run bandit -r src/ -c pyproject.toml
 
       - name: Run dependency audit
-        run: uv run pip-audit --ignore-vuln CVE-2026-69247
+        run: >-
+          uv run pip-audit
+          --ignore-vuln CVE-2026-69247
 
-  # E2E tests using Playwright with Chromium for browser automation.
-  e2e:
+  container:
+    # Build the production image on every trusted change so base-image and
+    # native-wheel compatibility failures are caught before a release run.
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -267,11 +270,50 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
+      - name: Build the production container
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
+            --tag data-chord:ci .
+        env:
+          PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
+
+      - name: Smoke-test the production container
+        run: |
+          docker run --rm \
+            --entrypoint python \
+            --env DEV_MODE=true \
+            --env DATA_CHORD_REFERENCE_TABLE=reference \
+            --env DATA_CHORD_HARMONIZATION_CACHE_TABLE=harmonization-cache \
+            --env DATA_CHORD_CDE_RECOMMENDATION_CACHE_TABLE=cde-recommendation-cache \
+            data-chord:ci \
+            -c "import backend.app.main, numpy, pandas, pyarrow; print('container smoke test passed')"
+
+  # E2E tests using Playwright with Chromium for browser automation.
+  e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Playwright 1.58.1 does not provide Chromium support for Ubuntu 26.04,
+    # which ubuntu-latest began selecting in October 2026.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Create agentic dependency token
+        id: agentic-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: agentic_harmonization
+
       - name: Install uv
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.12.3"
+          version: "0.13.4"
 
       - name: Set up Python
         run: uv python install
@@ -306,7 +348,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ steps.playwright-version.outputs.version }}-chromium
+          key: playwright-ubuntu-24.04-${{ steps.playwright-version.outputs.version }}-chromium
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'

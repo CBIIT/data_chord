@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # Security: keep uv pinned so dependency age enforcement stays stable in container builds.
-FROM ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc AS uv
+FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv
 
-FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641 AS builder
+# Amazon Linux 2023 is the deployment platform's maintained, minimal base.
+# Pin the dated AL2023 release and its multi-architecture manifest digest so
+# builds stay reproducible while avoiding Debian packages with no fixed release.
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20260831.0-minimal@sha256:279612ae66723f3f83ffdfe0045c428827d167c1954b0883e018985b8bb1d3e3 AS builder
 
 ARG DATA_CHORD_INCLUDE_LOCAL_INFERENCE=false
 
@@ -10,9 +13,9 @@ ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+RUN dnf install -y git python3.13 \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 COPY --from=uv /uv /usr/local/bin/uv
 
@@ -29,17 +32,21 @@ RUN --mount=type=secret,id=github_token \
     esac \
     && git config --global --unset-all url."https://x-access-token:${github_token}@github.com/".insteadOf
 
-FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641 AS runtime
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20260831.0-minimal@sha256:279612ae66723f3f83ffdfe0045c428827d167c1954b0883e018985b8bb1d3e3 AS runtime
+
+RUN dnf install -y libstdc++ python3.13 \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 ENV DATA_CHORD_UPLOAD_DIR="/tmp/data-chord/uploads" \
     DATA_CHORD_DATA_DIR="/data" \
     FORWARDED_ALLOW_IPS="*" \
+    HOME="/tmp" \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir /data \
-    && chown appuser:appuser /data
+RUN mkdir -p /data /tmp/data-chord/uploads \
+    && chown -R 65532:65532 /data /tmp/data-chord
 
 WORKDIR /app
 
@@ -51,7 +58,7 @@ COPY scripts /app/scripts
 COPY src /app/src
 COPY pyproject.toml README.md /app/
 
-USER appuser
+USER 65532:65532
 
 EXPOSE 8000
 

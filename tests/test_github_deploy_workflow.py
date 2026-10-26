@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "bootstrap-cloud-one.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DOCKERFILE = ROOT / "Dockerfile"
 
 
@@ -91,7 +92,19 @@ def test_bootstrap_and_release_serialize_the_shared_state() -> None:
 
 
 def test_release_base_images_are_pinned_by_digest() -> None:
-    from_lines = [line for line in DOCKERFILE.read_text(encoding="utf-8").splitlines() if line.startswith("FROM ")]
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
 
     assert len(from_lines) == 3
     assert all("@sha256:" in line for line in from_lines)
+    assert dockerfile.count("public.ecr.aws/amazonlinux/amazonlinux:2023.12.20260831.0-minimal@sha256:") == 2
+    assert "python:3.13-slim-bookworm" not in dockerfile
+    assert "dnf install -y libstdc++ python3.13" in dockerfile
+
+
+def test_ci_builds_and_smoke_tests_the_production_container() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
+    assert "--tag data-chord:ci" in workflow
+    assert "import backend.app.main, numpy, pandas, pyarrow" in workflow

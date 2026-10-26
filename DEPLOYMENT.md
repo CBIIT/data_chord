@@ -59,13 +59,16 @@ The foundation must exist first. Its expected state bucket is
 `cbiit-datachord-state-211125567571-us-east-1`, and the application state key is
 `datachord/cbiit/dev/cloud-one/tofu.tfstate`.
 
-### Complete the VPC contract
+### Dev VPC contract
 
-When the VPC request completes, update `environments/cbiit/dev.json` with the
-approved VPC id and at least two private subnet ids. Do not guess these values.
-The subnets need an approved outbound path to ECR, S3, DynamoDB, CloudWatch
-Logs, STS, and Bedrock through NAT or VPC endpoints. The application root does
-not create or alter that path.
+The committed dev contract uses the shared Cloud One development VPC
+`vpc-29a12251` and its two private web-application subnets,
+`subnet-4f35f112` and `subnet-409a0424`. They span two Availability Zones and
+do not auto-assign public IP addresses. The shared route table sends default
+traffic through the Cloud One transit gateway and has an S3 VPC endpoint.
+The application root does not create or alter that network path. The first
+deployment smoke test must still prove that a Fargate task can reach ECR, S3,
+DynamoDB, CloudWatch Logs, STS, and Bedrock over the approved path.
 
 The initial security group has no inbound rule. Optional internal CIDR ranges
 can be committed later, but no caller should reach the application until a

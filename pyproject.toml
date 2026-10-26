@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "anyio>=4.14.2",  # PYSEC-2026-4024, PYSEC-2026-4025
+    "certifi==2026.10.19",  # PYSEC-2026-4320 / GHSA-6q48-6c7w-9gw2
     "fastapi>=0.135.4,<0.136.0",  # allows Starlette security fix line
     "jinja2>=3.1.4",
     "python-multipart>=0.0.31",  # CVE remediation
@@ -38,8 +39,9 @@ dev = [
     "pip>=26.2",  # CVE remediation for the audited virtualenv pip package
     "pre-commit>=3.8",
     # transitive dep pin for security (CVE remediation)
-    "filelock>=3.20.1",  # CVE-2025-68146 (via virtualenv/pre-commit)
-    "virtualenv>=21.7.13",  # PYSEC-2026-4011 through PYSEC-2026-4014
+    "filelock>=4.2.1",  # CVE-2026-112907, CVE-2026-112913, CVE-2026-112940
+    "setuptools>=84.2.1",  # GHSA-xmj3-9gf7-h52w
+    "virtualenv>=21.14.9",  # CVE remediation through 21.14.9
     "vulture>=2.16",
 ]
 
@@ -84,6 +86,9 @@ min_confidence = 100
 # Security: require Python packages to be at least 7 days old before resolution.
 # This is an important supply-chain protection against newly published compromised packages.
 exclude-newer = "7 days"
+# Approved 2026-10-26 security-fix exception, bounded to the exact artifacts
+# above. Remove after 2026-10-27T19:02:00Z, when both clear the normal window.
+exclude-newer-package = { certifi = "2026-10-20T02:25:00Z", setuptools = "2026-10-20T19:02:00Z" }
 
 [tool.uv.sources]
 agent-experiment = { git = "https://github.com/CBIIT/agentic_harmonization.git", rev = "2c71e1807d5181021944524209b75ecf6c40f025" }
