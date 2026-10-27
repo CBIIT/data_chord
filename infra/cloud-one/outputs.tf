@@ -45,6 +45,6 @@ output "runtime_environment" {
     DATA_CHORD_S3_PREFIX                      = local.deployment_prefix
     DATA_CHORD_STORAGE                        = "s3"
     }, local.internal_dev_preview_active ? {
-    DATA_CHORD_DEV_MODE = "true"
+    DEV_MODE = "true"
   } : {})
 }
