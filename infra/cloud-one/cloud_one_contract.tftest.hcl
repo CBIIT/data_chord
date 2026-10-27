@@ -124,7 +124,7 @@ run "dev_preview_uses_an_internal_alb_and_explicit_dev_identity" {
   assert {
     condition = (
       output.runtime_environment.DATA_CHORD_IDENTITY_SOURCE == "shared" &&
-      output.runtime_environment.DATA_CHORD_DEV_MODE == "true"
+      output.runtime_environment.DEV_MODE == "true"
     )
     error_message = "The no-user dev preview must explicitly enable shared dev identity."
   }

@@ -182,7 +182,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DATA_CHORD_S3_PREFIX", value = local.deployment_prefix },
       { name = "DATA_CHORD_STORAGE", value = "s3" },
       ], local.internal_dev_preview_active ? [
-      { name = "DATA_CHORD_DEV_MODE", value = "true" },
+      { name = "DEV_MODE", value = "true" },
     ] : [])
     logConfiguration = {
       logDriver = "awslogs"
