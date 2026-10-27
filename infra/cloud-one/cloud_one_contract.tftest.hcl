@@ -108,7 +108,7 @@ run "dev_preview_uses_an_internal_alb_and_explicit_dev_identity" {
     image_digest                 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     vpc_id                       = "vpc-0123456789abcdef0"
     private_subnet_ids           = ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"]
-    ingress_cidr_blocks          = ["10.208.0.0/21"]
+    ingress_cidr_blocks          = ["0.0.0.0/0"]
   }
 
   assert {
@@ -138,9 +138,9 @@ run "dev_preview_uses_an_internal_alb_and_explicit_dev_identity" {
 
   assert {
     condition = (
-      toset(one(aws_security_group.internal_alb[0].ingress).cidr_blocks) == toset(["10.208.0.0/21"]) &&
+      toset(one(aws_security_group.internal_alb[0].ingress).cidr_blocks) == toset(["0.0.0.0/0"]) &&
       toset(one(aws_security_group.task[0].ingress).security_groups) == toset([aws_security_group.internal_alb[0].id])
     )
-    error_message = "Only approved internal CIDRs may reach the ALB, and only the ALB may reach the task."
+    error_message = "The internal ALB must accept the configured client CIDRs, and only the ALB may reach the task."
   }
 }
