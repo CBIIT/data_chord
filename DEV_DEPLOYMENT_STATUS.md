@@ -124,14 +124,13 @@ the release advances or a new issue is found.
    deploy workloads into the shared subnets but does not manage the underlying
    network.
 4. **The internal preview is intentionally not a production user endpoint.** It
-   uses HTTP and a fixed shared dev identity, has no Cognito, TLS certificate, or
-   friendly DNS name, and accepts ALB ingress only from the dev VPC CIDR
-   `10.208.0.0/21`. The ALB target is healthy, but a browser test from the current
-   workstation returned `ERR_ADDRESS_UNREACHABLE`. If workstation access is
-   required, the network team must confirm a routed NCI/VPN path to the private
-   ALB subnets and the approved VPN/client source CIDR; that CIDR can then replace
-   or augment the VPC-only allowlist. No public or external-internet endpoint is
-   requested for dev.
+   uses HTTP and a fixed shared dev identity, and has no Cognito, TLS certificate,
+   or friendly DNS name. Its ALB security group permits HTTP from `0.0.0.0/0`,
+   but the ALB is internal and has only private VPC addresses; callers must still
+   have an existing private route through an approved connected network such as
+   the NCI VPN. Authentication and authorization for a future user-facing service
+   remain the deploying organization's responsibility. No public or
+   external-internet endpoint is requested for dev.
 5. **Two third-party Actions still target deprecated Node.js 20.** GitHub forced
    `actions/create-github-app-token` and the artifact upload/download actions to
    Node.js 24 during this release. The run passed, but their pinned versions
