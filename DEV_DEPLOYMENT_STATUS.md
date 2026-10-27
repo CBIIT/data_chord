@@ -10,7 +10,8 @@ the release advances or a new issue is found.
 - Region: `us-east-1`
 - VPC: `vpc-29a12251` (`vpc-dev-us-east-1`)
 - Private ECS subnets: `subnet-4f35f112` and `subnet-409a0424`
-- Deployment profile: private dev, one Fargate task, no load balancer or public ingress
+- Deployment profile: private dev, one Fargate task, internal HTTP ALB, no
+  public ingress or production authentication
 
 ## Verified before runtime deployment
 
@@ -91,6 +92,23 @@ the release advances or a new issue is found.
   stable at one running task. The live Fargate smoke task exited successfully,
   proving the application task role, private-network egress, S3, DynamoDB,
   reference catalog, and both GPT-5.6 inference profiles.
+- GitHub Actions run [`40522279182`](https://github.com/CBIIT/data_chord/actions/runs/40522279182)
+  created the internal ALB, listener, target group, and security-group path, but
+  the new ECS task repeatedly exited before it could become healthy. Live ECS
+  logs identified a configuration-name mismatch: the task definition supplied
+  `DATA_CHORD_DEV_MODE=true`, while application startup deliberately requires
+  `DEV_MODE=true` before it permits shared identity in a hosted profile. PR
+  [#11](https://github.com/CBIIT/data_chord/pull/11) corrected the task
+  definition and its OpenTofu contract test.
+- GitHub Actions run [`40527532600`](https://github.com/CBIIT/data_chord/actions/runs/40527532600)
+  completed the corrected internal-preview release from merged commit
+  `8a63ed0`. It published ECR image
+  `sha256:d98c068aeeef0e501cc6fe47f9660f19e901f68ee211b63d905a264d05643f4c`,
+  applied the exact reviewed plan, stabilized ECS task definition revision 3,
+  and verified one healthy ALB target. The live Fargate smoke task again proved
+  S3, DynamoDB, the reference catalog, and both selected model profiles. The
+  resulting private preview URL is
+  `http://internal-data-chord-dev-internal-196848599.us-east-1.elb.amazonaws.com`.
 
 ## Open issues and follow-up
 
@@ -105,9 +123,15 @@ the release advances or a new issue is found.
 3. **The VPC is shared.** Its owner is AWS account `019211168375`; DataChord can
    deploy workloads into the shared subnets but does not manage the underlying
    network.
-4. **There is no user login endpoint yet.** The initial service has no load
-   balancer, public ingress, Cognito, DNS, or TLS endpoint. Successful deployment
-   proves the private runtime and its dependencies, not end-user access.
+4. **The internal preview is intentionally not a production user endpoint.** It
+   uses HTTP and a fixed shared dev identity, has no Cognito, TLS certificate, or
+   friendly DNS name, and accepts ALB ingress only from the dev VPC CIDR
+   `10.208.0.0/21`. The ALB target is healthy, but a browser test from the current
+   workstation returned `ERR_ADDRESS_UNREACHABLE`. If workstation access is
+   required, the network team must confirm a routed NCI/VPN path to the private
+   ALB subnets and the approved VPN/client source CIDR; that CIDR can then replace
+   or augment the VPC-only allowlist. No public or external-internet endpoint is
+   requested for dev.
 5. **Two third-party Actions still target deprecated Node.js 20.** GitHub forced
    `actions/create-github-app-token` and the artifact upload/download actions to
    Node.js 24 during this release. The run passed, but their pinned versions
@@ -122,3 +146,6 @@ the release advances or a new issue is found.
 - [x] Runtime plan applied through the protected `dev` GitHub environment
 - [x] ECS service stable at one desired task
 - [x] S3, DynamoDB, reference catalog, and Bedrock smoke checks passed
+- [x] Internal ALB, listener, target group, and least-privilege security-group
+      path deployed across the two approved private subnets
+- [x] ECS registered exactly one healthy target and exposed the internal dev URL
