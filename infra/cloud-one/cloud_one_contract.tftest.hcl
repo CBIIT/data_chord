@@ -12,6 +12,23 @@ mock_provider "aws" {
       arn = "arn:aws:iam::211125567571:role/application/data-chord-dev"
     }
   }
+
+  mock_resource "aws_security_group" {
+    defaults = { id = "sg-0123456789abcdef0" }
+  }
+
+  mock_resource "aws_lb" {
+    defaults = {
+      arn      = "arn:aws:elasticloadbalancing:us-east-1:211125567571:loadbalancer/app/data-chord-dev-internal/0123456789abcdef"
+      dns_name = "internal-data-chord-dev.us-east-1.elb.amazonaws.com"
+    }
+  }
+
+  mock_resource "aws_lb_target_group" {
+    defaults = {
+      arn = "arn:aws:elasticloadbalancing:us-east-1:211125567571:targetgroup/data-chord-dev-preview/0123456789abcdef"
+    }
+  }
 }
 
 variables {
@@ -79,5 +96,51 @@ run "runtime_uses_the_immutable_image_and_private_network" {
       jsondecode(aws_iam_role_policy.task_bedrock.policy).Statement[2].Condition.StringEquals["sts:AWSServiceName"] == "bedrock.amazonaws.com"
     )
     error_message = "The workload role must be able to obtain short-lived Bedrock Mantle bearer tokens."
+  }
+}
+
+run "dev_preview_uses_an_internal_alb_and_explicit_dev_identity" {
+  command = plan
+
+  variables {
+    runtime_enabled              = true
+    internal_dev_preview_enabled = true
+    image_digest                 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    vpc_id                       = "vpc-0123456789abcdef0"
+    private_subnet_ids           = ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"]
+    ingress_cidr_blocks          = ["10.208.0.0/21"]
+  }
+
+  assert {
+    condition = (
+      aws_lb.internal_dev[0].internal == true &&
+      aws_lb.internal_dev[0].subnets == toset(var.private_subnet_ids) &&
+      aws_lb_listener.internal_dev_http[0].port == 80 &&
+      aws_lb_target_group.internal_dev[0].health_check[0].path == "/healthz"
+    )
+    error_message = "The dev preview must use an internal HTTP ALB across the approved private subnets."
+  }
+
+  assert {
+    condition = (
+      output.runtime_environment.DATA_CHORD_IDENTITY_SOURCE == "shared" &&
+      output.runtime_environment.DATA_CHORD_DEV_MODE == "true"
+    )
+    error_message = "The no-user dev preview must explicitly enable shared dev identity."
+  }
+
+  assert {
+    condition = (
+      one(aws_ecs_service.app[0].load_balancer).target_group_arn == aws_lb_target_group.internal_dev[0].arn
+    )
+    error_message = "The dev ECS service must register its application container with the internal target group."
+  }
+
+  assert {
+    condition = (
+      toset(one(aws_security_group.internal_alb[0].ingress).cidr_blocks) == toset(["10.208.0.0/21"]) &&
+      toset(one(aws_security_group.task[0].ingress).security_groups) == toset([aws_security_group.internal_alb[0].id])
+    )
+    error_message = "Only approved internal CIDRs may reach the ALB, and only the ALB may reach the task."
   }
 }

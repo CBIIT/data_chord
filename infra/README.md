@@ -34,8 +34,13 @@ creates the selected middle tier plus its private runtime:
 - one workflow S3 bucket and three DynamoDB tables;
 - an ECS cluster, CloudWatch log group, bounded task roles, and (after network
   completion) one private Fargate service; and
-- no VPC, public IP, load balancer, DNS, certificate, Cognito user pool, or
-  public endpoint.
+- no VPC, public IP, DNS, certificate, Cognito user pool, or public endpoint.
+
+For the no-user `cbiit/dev` preview, this root can additionally create an
+internal HTTP Application Load Balancer in the approved private web subnets.
+The preview accepts only the committed internal CIDR allowlist, enables the
+application's explicit dev identity mode, and remains unavailable from the
+public internet. It is not the production authentication or TLS design.
 
 Bootstrap and runtime share
 `datachord/<target>/<stage>/cloud-one/tofu.tfstate`. Bootstrap deliberately

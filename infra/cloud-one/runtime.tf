@@ -118,13 +118,13 @@ resource "aws_security_group" "task" {
   vpc_id      = var.vpc_id
 
   dynamic "ingress" {
-    for_each = var.ingress_cidr_blocks
+    for_each = local.internal_dev_preview_active ? [1] : []
     content {
-      description = "Internal DataChord traffic"
-      from_port   = 8000
-      to_port     = 8000
-      protocol    = "tcp"
-      cidr_blocks = [ingress.value]
+      description     = "DataChord traffic from the internal dev ALB"
+      from_port       = 8000
+      to_port         = 8000
+      protocol        = "tcp"
+      security_groups = [aws_security_group.internal_alb[0].id]
     }
   }
 
@@ -168,20 +168,22 @@ resource "aws_ecs_task_definition" "app" {
       protocol      = "tcp"
       appProtocol   = "http"
     }]
-    environment = [
+    environment = concat([
       { name = "AWS_REGION", value = var.aws_region },
       { name = "DATA_CHORD_AGENTIC_WORKERS", value = tostring(var.agentic_workers) },
       { name = "DATA_CHORD_ASSET_VERSION", value = var.image_digest },
       { name = "DATA_CHORD_CDE_RECOMMENDATION_CACHE_TABLE", value = module.data_plane.cde_recommendation_cache_table_name },
       { name = "DATA_CHORD_HARMONIZATION_CACHE_TABLE", value = module.data_plane.harmonization_cache_table_name },
-      { name = "DATA_CHORD_IDENTITY_SOURCE", value = "trusted_proxy" },
+      { name = "DATA_CHORD_IDENTITY_SOURCE", value = local.internal_dev_preview_active ? "shared" : "trusted_proxy" },
       { name = "DATA_CHORD_MAX_ACTIVE_JOBS", value = tostring(var.maximum_active_jobs) },
       { name = "DATA_CHORD_PROFILE", value = "hosted" },
       { name = "DATA_CHORD_REFERENCE_TABLE", value = module.data_plane.reference_data_table_name },
       { name = "DATA_CHORD_S3_BUCKET", value = module.data_plane.workflow_bucket_name },
       { name = "DATA_CHORD_S3_PREFIX", value = local.deployment_prefix },
       { name = "DATA_CHORD_STORAGE", value = "s3" },
-    ]
+      ], local.internal_dev_preview_active ? [
+      { name = "DATA_CHORD_DEV_MODE", value = "true" },
+    ] : [])
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -232,6 +234,17 @@ resource "aws_ecs_service" "app" {
     security_groups  = [aws_security_group.task[0].id]
     assign_public_ip = false
   }
+
+  dynamic "load_balancer" {
+    for_each = local.internal_dev_preview_active ? [1] : []
+    content {
+      target_group_arn = aws_lb_target_group.internal_dev[0].arn
+      container_name   = "app"
+      container_port   = 8000
+    }
+  }
+
+  depends_on = [aws_lb_listener.internal_dev_http]
 
   tags = local.common_tags
 }

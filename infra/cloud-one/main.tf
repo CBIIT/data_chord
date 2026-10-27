@@ -10,12 +10,24 @@ data "aws_caller_identity" "current" {
 }
 
 locals {
-  name_prefix       = "data-chord-${var.environment}"
-  deployment_prefix = "datachord/${var.deployment_target}/${var.environment}"
+  name_prefix                 = "data-chord-${var.environment}"
+  deployment_prefix           = "datachord/${var.deployment_target}/${var.environment}"
+  internal_dev_preview_active = var.runtime_enabled && var.internal_dev_preview_enabled
   common_tags = {
     Project     = "data-chord"
     Environment = var.environment
     ManagedBy   = "opentofu"
+  }
+}
+
+check "internal_dev_preview_scope" {
+  assert {
+    condition = !var.internal_dev_preview_enabled || (
+      var.environment == "dev" &&
+      var.runtime_enabled &&
+      length(var.ingress_cidr_blocks) > 0
+    )
+    error_message = "internal_dev_preview_enabled requires the dev runtime and at least one internal ingress CIDR."
   }
 }
 

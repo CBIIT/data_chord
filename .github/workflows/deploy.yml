@@ -234,6 +234,8 @@ jobs:
               raise SystemExit("AWS did not return every configured subnet")
           if any(item["VpcId"] != vpc_id or item["State"] != "available" for item in subnets):
               raise SystemExit("every subnet must be available and belong to the configured VPC")
+          if any(item["MapPublicIpOnLaunch"] for item in subnets):
+              raise SystemExit("the internal dev preview requires private subnets")
           if len({item["AvailabilityZone"] for item in subnets}) < 2:
               raise SystemExit("private subnets must span at least two Availability Zones")
           PY
@@ -334,13 +336,20 @@ jobs:
             -backend-config="use_lockfile=true"
           tofu -chdir=infra/cloud-one apply -input=false "../../.plans/dev-runtime.tfplan"
 
-      - name: Wait for the private ECS service to stabilize
+      - name: Wait for the ECS service and internal target to stabilize
         run: |
           aws ecs wait services-stable --cluster data-chord-dev --services data-chord-dev
           running="$(aws ecs describe-services \
             --cluster data-chord-dev --services data-chord-dev \
             --query 'services[0].runningCount' --output text)"
           test "${running}" = "1"
+          target_group="$(tofu -chdir=infra/cloud-one output -raw internal_dev_target_group_arn)"
+          aws elbv2 wait target-in-service --target-group-arn "${target_group}"
+          healthy="$(aws elbv2 describe-target-health \
+            --target-group-arn "${target_group}" \
+            --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+            --output text)"
+          test "${healthy}" = "1"
 
       - name: Exercise the task role, data plane, and selected models
         run: |
@@ -373,10 +382,14 @@ jobs:
       - name: Write deployment summary
         if: always()
         run: |
+          preview_url="$(tofu -chdir=infra/cloud-one output -raw internal_dev_preview_url 2>/dev/null || true)"
           {
             echo "## DataChord dev deployment"
             echo
             echo "- **Source:** \`${GITHUB_SHA}\`"
             echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
             echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
+            if [ -n "${preview_url}" ]; then
+              echo "- **Internal dev preview:** ${preview_url}"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"
