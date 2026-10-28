@@ -154,7 +154,7 @@ variable "desired_count" {
 variable "agentic_workers" {
   description = "Maximum concurrent agentic term harmonizations in one task."
   type        = number
-  default     = 5
+  default     = 100
 
   validation {
     condition     = var.agentic_workers >= 1 && var.agentic_workers <= 100

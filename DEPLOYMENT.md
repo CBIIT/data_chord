@@ -21,7 +21,7 @@ The initial CBIIT target is `cbiit/dev` in non-production account
 `211125567571`, Region `us-east-1`. It intentionally omits a load balancer,
 Cognito, DNS, certificates, and public ingress. The first service is one
 on-demand Fargate task with 1 vCPU, 4 GiB of memory, the default 20 GiB of
-ephemeral storage, five concurrent agentic workers, and one active job. Keep
+ephemeral storage, up to 100 concurrent agentic workers, and one active job. Keep
 minimum, desired, and maximum task counts at one until request routing and the
 in-memory job lifecycle have been qualified for multiple tasks.
 
@@ -108,8 +108,10 @@ STS, and Bedrock. The release preflight checks that the configured VPC and
 available subnets exist in this account and Region and span at least two
 Availability Zones; the smoke task proves that the task can use the resulting
 runtime path. Also verify the account is authorized for GPT-5.6 Luna and Sol in
-`us-east-1`, and start with `DATA_CHORD_AGENTIC_WORKERS=5`. Monitor throttles,
-latency, memory, and task restarts before increasing concurrency.
+`us-east-1`, and set `DATA_CHORD_AGENTIC_WORKERS=100`. The effective worker count
+is bounded by the number of provider terms in a batch. Monitor throttles, latency,
+memory, and task restarts, and reduce the configured limit if the account or task
+reaches a service quota or resource constraint.
 
 ## Portable container
 
