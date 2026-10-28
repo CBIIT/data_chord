@@ -206,7 +206,7 @@ class FileHarmonizationService:
         try:
             provider_outcomes = self._run_provider_terms(provider_work)
         except BaseException as exc:
-            logger.info(
+            logger.warning(
                 "Harmonization provider run failed",
                 extra={
                     "event_name": "harmonization.provider.failed",

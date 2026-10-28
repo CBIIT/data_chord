@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
+import pytest
 from netrias_client import read_tabular
 
 from src.domain.columns import column_key_for_index
@@ -170,6 +173,45 @@ def test_agentic_batch_logs_effective_worker_limit(monkeypatch, caplog) -> None:
     assert completed.worker_count == 1
     assert completed.configured_worker_limit == 1
     assert completed.duration_ms >= 0
+
+
+def test_agentic_batch_failure_logs_total_drain_duration(monkeypatch, caplog) -> None:
+    requests = tuple(
+        TermHarmonizationRequest(
+            cde="diagnosis",
+            input_term=term,
+            permissible_values=("Known",),
+            context="Target CDE: diagnosis",
+        )
+        for term in ("fail", "slow")
+    )
+    barrier = Barrier(2)
+
+    def harmonize_one(request, _indexes):
+        barrier.wait(timeout=1)
+        if request.input_term == "fail":
+            raise RuntimeError("provider failed")
+        time.sleep(0.05)
+        return TermHarmonizationResponse(
+            matched_value="Known",
+            match_fidelity=MatchFidelity.STRONG,
+        )
+
+    service = AgenticTermHarmonizer(AgenticHarmonizeConfig(region="us-east-2", max_workers=2))
+    monkeypatch.setattr(service, "_harmonize_term", harmonize_one)
+    caplog.set_level(logging.WARNING, logger="src.integrations.agentic_harmonize")
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        service.harmonize(requests)
+
+    failed = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "harmonization.agentic_batch.failed"
+    )
+    assert failed.duration_ms >= 40
+    assert failed.time_to_first_error_ms is not None
+    assert failed.time_to_first_error_ms < failed.duration_ms
 
 
 def test_agentic_harmonization_collapses_duplicates_only_within_each_column(

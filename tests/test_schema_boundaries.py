@@ -128,7 +128,7 @@ def test_stage_three_job_rejects_boolean_schema_version() -> None:
 
 
 def test_stage_three_job_rejects_older_and_newer_schema_versions() -> None:
-    for schema_version in (1, 2, 5):
+    for schema_version in (1, 2, 4):
         with pytest.raises(HarmonizationJobUnreadableError, match="not supported"):
             HarmonizationJobState.from_store({"schema_version": schema_version}, _FILE_ID)
 
@@ -158,7 +158,7 @@ def test_current_harmonization_job_round_trips_without_derived_url() -> None:
 
     assert loaded == job
     assert stored == {
-        "schema_version": 4,
+        "schema_version": 3,
         "polling_job_id": "job-1",
         "job_id": "job-1",
         "file_id": _FILE_ID,
@@ -197,7 +197,6 @@ def test_current_harmonization_job_round_trips_without_derived_url() -> None:
         "plan_version",
         "worker_id",
         "lease_expires_at",
-        "completed_at",
         "job_id_available",
     ],
 )
@@ -215,7 +214,7 @@ def test_current_harmonization_job_requires_every_current_field(required_field: 
         HarmonizationJobState.from_store(stored, _FILE_ID)
 
 
-def test_legacy_completed_job_uses_terminal_lease_as_completion_time() -> None:
+def test_existing_completed_job_uses_terminal_lease_as_completion_time() -> None:
     started_at = datetime(2026, 8, 6, tzinfo=UTC)
     stored = replace(
         HarmonizationJobState.queued(
@@ -228,7 +227,6 @@ def test_legacy_completed_job_uses_terminal_lease_as_completion_time() -> None:
         status=HarmonizeStatus.SUCCEEDED,
         lease_expires_at=datetime(2026, 8, 6, 0, 1, 41, tzinfo=UTC),
     ).to_store()
-    stored["schema_version"] = 3
     del stored["completed_at"]
 
     loaded = HarmonizationJobState.from_store(stored, _FILE_ID)

@@ -93,45 +93,51 @@ class AgenticTermHarmonizer:
             },
         )
         indexed_requests = iter(enumerate(requests))
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures: dict[Future[TermHarmonizationResponse], int] = {}
-            for _ in range(worker_count):
-                index, request = next(indexed_requests)
-                future = executor.submit(
-                    self._harmonize_term,
-                    request,
-                    indexes[request.permissible_values],
-                )
-                futures[future] = index
-            try:
-                while futures:
-                    completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
-                    for future in completed:
-                        responses[futures.pop(future)] = future.result()
-                        next_item = next(indexed_requests, None)
-                        if next_item is not None:
-                            index, request = next_item
-                            submitted = executor.submit(
-                                self._harmonize_term,
-                                request,
-                                indexes[request.permissible_values],
-                            )
-                            futures[submitted] = index
-            except Exception as exc:
-                for future in futures:
-                    future.cancel()
-                logger.info(
-                    "Agentic harmonization batch failed",
-                    extra={
-                        "event_name": "harmonization.agentic_batch.failed",
-                        "term_count": len(requests),
-                        "worker_count": worker_count,
-                        "configured_worker_limit": self._config.max_workers,
-                        "duration_ms": _elapsed_ms(started_at),
-                        "error_type": type(exc).__name__,
-                    },
-                )
-                raise
+        futures: dict[Future[TermHarmonizationResponse], int] = {}
+        time_to_first_error_ms: int | None = None
+        try:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                for _ in range(worker_count):
+                    index, request = next(indexed_requests)
+                    future = executor.submit(
+                        self._harmonize_term,
+                        request,
+                        indexes[request.permissible_values],
+                    )
+                    futures[future] = index
+                try:
+                    while futures:
+                        completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
+                        for future in completed:
+                            responses[futures.pop(future)] = future.result()
+                            next_item = next(indexed_requests, None)
+                            if next_item is not None:
+                                index, request = next_item
+                                submitted = executor.submit(
+                                    self._harmonize_term,
+                                    request,
+                                    indexes[request.permissible_values],
+                                )
+                                futures[submitted] = index
+                except Exception:
+                    time_to_first_error_ms = _elapsed_ms(started_at)
+                    for future in futures:
+                        future.cancel()
+                    raise
+        except Exception as exc:
+            logger.warning(
+                "Agentic harmonization batch failed",
+                extra={
+                    "event_name": "harmonization.agentic_batch.failed",
+                    "term_count": len(requests),
+                    "worker_count": worker_count,
+                    "configured_worker_limit": self._config.max_workers,
+                    "duration_ms": _elapsed_ms(started_at),
+                    "time_to_first_error_ms": time_to_first_error_ms,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
         if any(response is None for response in responses):
             raise RuntimeError("Agentic harmonization returned an incomplete result")
         logger.info(

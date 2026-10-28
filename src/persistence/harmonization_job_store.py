@@ -18,8 +18,7 @@ from src.storage import (
     WorkflowStorage,
 )
 
-_CURRENT_SCHEMA_VERSION: Final = 4
-_LEGACY_SCHEMA_VERSION: Final = 3
+_CURRENT_SCHEMA_VERSION: Final = 3
 _DEFAULT_LEASE_SECONDS: Final = 45
 _SAFE_FAILED_DETAIL: Final = "Harmonization failed. Please retry."
 
@@ -151,7 +150,7 @@ class HarmonizationJobState:
         schema_version = payload.get("schema_version")
         if isinstance(schema_version, bool) or not isinstance(schema_version, int):
             raise HarmonizationJobUnreadableError("harmonization job has an invalid schema version")
-        if schema_version not in {_LEGACY_SCHEMA_VERSION, _CURRENT_SCHEMA_VERSION}:
+        if schema_version != _CURRENT_SCHEMA_VERSION:
             raise HarmonizationJobUnreadableError(
                 f"harmonization job schema {schema_version} is not supported"
             )
@@ -169,11 +168,9 @@ class HarmonizationJobState:
         plan_version = _required_non_empty_string(payload, "plan_version")
         worker_id = _required_non_empty_string(payload, "worker_id")
         lease_expires_at = _required_datetime(payload, "lease_expires_at")
-        completed_at = (
-            _optional_datetime(payload, "completed_at")
-            if schema_version == _CURRENT_SCHEMA_VERSION
-            else lease_expires_at if status != HarmonizeStatus.QUEUED else None
-        )
+        completed_at = _optional_datetime(payload, "completed_at")
+        if completed_at is None and status != HarmonizeStatus.QUEUED:
+            completed_at = lease_expires_at
         job_id_available = payload.get("job_id_available")
         if not isinstance(job_id_available, bool):
             raise HarmonizationJobUnreadableError("harmonization job has invalid job_id_available")
@@ -273,9 +270,7 @@ def _required_datetime(payload: Mapping[str, object], field: str) -> datetime:
 
 
 def _optional_datetime(payload: Mapping[str, object], field: str) -> datetime | None:
-    if field not in payload:
-        raise HarmonizationJobUnreadableError(f"harmonization job has invalid {field}")
-    value = payload[field]
+    value = payload.get(field)
     if value is None:
         return None
     return _required_datetime(payload, field)
