@@ -44,6 +44,7 @@ class HarmonizationJobState:
     plan_version: str
     worker_id: str
     lease_expires_at: datetime
+    completed_at: datetime | None = None
     job_id_available: bool = False
     manifest_summary: HarmonizationManifestSummary | None = None
 
@@ -51,7 +52,10 @@ class HarmonizationJobState:
         for field_name, value in (
             ("started_at", self.started_at),
             ("lease_expires_at", self.lease_expires_at),
+            ("completed_at", self.completed_at),
         ):
+            if value is None:
+                continue
             if value.tzinfo is None or value.utcoffset() is None:
                 raise ValueError(f"HarmonizationJobState.{field_name} must be timezone-aware")
 
@@ -79,8 +83,8 @@ class HarmonizationJobState:
         )
 
     def elapsed_seconds(self, *, now: datetime | None = None) -> int:
-        current_time = now or datetime.now(UTC)
-        return max(0, int((current_time - self.started_at).total_seconds()))
+        stopped_at = self.completed_at or now or datetime.now(UTC)
+        return max(0, int((stopped_at - self.started_at).total_seconds()))
 
     def matches_request(self, job_id: str) -> bool:
         return job_id in {self.polling_job_id, self.job_id}
@@ -101,12 +105,15 @@ class HarmonizationJobState:
             lease_expires_at=heartbeat_at + timedelta(seconds=_DEFAULT_LEASE_SECONDS),
         )
 
-    def interrupted(self) -> HarmonizationJobState:
+    def interrupted(self, *, now: datetime | None = None) -> HarmonizationJobState:
+        completed_at = now or datetime.now(UTC)
         return replace(
             self,
             status=HarmonizeStatus.FAILED,
             detail="Harmonization was interrupted. Please retry.",
             job_id_available=False,
+            lease_expires_at=completed_at,
+            completed_at=completed_at,
         )
 
     def to_store(self) -> dict[str, object]:
@@ -121,6 +128,7 @@ class HarmonizationJobState:
             "plan_version": self.plan_version,
             "worker_id": self.worker_id,
             "lease_expires_at": self.lease_expires_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at is not None else None,
             "job_id_available": self.job_id_available,
         }
         if self.manifest_summary is not None:
@@ -160,6 +168,9 @@ class HarmonizationJobState:
         plan_version = _required_non_empty_string(payload, "plan_version")
         worker_id = _required_non_empty_string(payload, "worker_id")
         lease_expires_at = _required_datetime(payload, "lease_expires_at")
+        completed_at = _optional_datetime(payload, "completed_at")
+        if completed_at is None and status != HarmonizeStatus.QUEUED:
+            completed_at = lease_expires_at
         job_id_available = payload.get("job_id_available")
         if not isinstance(job_id_available, bool):
             raise HarmonizationJobUnreadableError("harmonization job has invalid job_id_available")
@@ -174,6 +185,7 @@ class HarmonizationJobState:
             plan_version=plan_version,
             worker_id=worker_id,
             lease_expires_at=lease_expires_at,
+            completed_at=completed_at,
             job_id_available=job_id_available,
             manifest_summary=_manifest_summary_from_store(payload.get("manifest_summary")),
         )
@@ -255,6 +267,13 @@ def _required_datetime(payload: Mapping[str, object], field: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise HarmonizationJobUnreadableError(f"harmonization job has invalid {field}")
     return parsed
+
+
+def _optional_datetime(payload: Mapping[str, object], field: str) -> datetime | None:
+    value = payload.get(field)
+    if value is None:
+        return None
+    return _required_datetime(payload, field)
 
 
 def _manifest_summary_from_store(value: object) -> HarmonizationManifestSummary | None:

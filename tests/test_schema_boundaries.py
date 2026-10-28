@@ -168,6 +168,7 @@ def test_current_harmonization_job_round_trips_without_derived_url() -> None:
         "plan_version": "plan-1",
         "worker_id": "worker-1",
         "lease_expires_at": "2026-08-06T00:00:45+00:00",
+        "completed_at": None,
         "job_id_available": False,
         "manifest_summary": {
             "total_terms": 3,
@@ -211,6 +212,27 @@ def test_current_harmonization_job_requires_every_current_field(required_field: 
 
     with pytest.raises(HarmonizationJobUnreadableError):
         HarmonizationJobState.from_store(stored, _FILE_ID)
+
+
+def test_existing_completed_job_uses_terminal_lease_as_completion_time() -> None:
+    started_at = datetime(2026, 8, 6, tzinfo=UTC)
+    stored = replace(
+        HarmonizationJobState.queued(
+            polling_job_id="job-1",
+            file_id=_FILE_ID,
+            plan_version="plan-1",
+            worker_id="worker-1",
+            now=started_at,
+        ),
+        status=HarmonizeStatus.SUCCEEDED,
+        lease_expires_at=datetime(2026, 8, 6, 0, 1, 41, tzinfo=UTC),
+    ).to_store()
+    del stored["completed_at"]
+
+    loaded = HarmonizationJobState.from_store(stored, _FILE_ID)
+
+    assert loaded.completed_at == datetime(2026, 8, 6, 0, 1, 41, tzinfo=UTC)
+    assert loaded.elapsed_seconds(now=datetime(2026, 8, 7, tzinfo=UTC)) == 101
 
 
 def _readiness_context(
