@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -27,6 +28,10 @@ from src.persistence.manifest_writer import write_manifest_parquet
 from src.persistence.pv_manifest_store import ColumnPvSets
 
 logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(round((time.perf_counter() - started_at) * 1000), 0)
 
 
 @dataclass(frozen=True)
@@ -197,7 +202,28 @@ class FileHarmonizationService:
                 "provider_terms": len(provider_work),
             },
         )
-        provider_outcomes = self._run_provider_terms(provider_work)
+        provider_started_at = time.perf_counter()
+        try:
+            provider_outcomes = self._run_provider_terms(provider_work)
+        except BaseException as exc:
+            logger.info(
+                "Harmonization provider run failed",
+                extra={
+                    "event_name": "harmonization.provider.failed",
+                    "provider_terms": len(provider_work),
+                    "duration_ms": _elapsed_ms(provider_started_at),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+        logger.info(
+            "Harmonization provider run completed",
+            extra={
+                "event_name": "harmonization.provider.completed",
+                "provider_terms": len(provider_work),
+                "duration_ms": _elapsed_ms(provider_started_at),
+            },
+        )
         outcomes.extend(provider_outcomes)
         if use_cache:
             self._save_cache(data_model_version, provider_outcomes)

@@ -316,6 +316,7 @@ def complete_harmonization_job(
     authority = RunAuthority(workflow_storage, user, accepted_job)
     loaded = authority.require_current()
     authority.require_plan_current()
+    completed_at = datetime.now(UTC)
     completed = replace(
         loaded.job,
         job_id=response.job_id,
@@ -323,7 +324,8 @@ def complete_harmonization_job(
         detail=_safe_detail(response.status, response.detail),
         job_id_available=response.job_id_available,
         manifest_summary=response.manifest_summary,
-        lease_expires_at=datetime.now(UTC),
+        lease_expires_at=completed_at,
+        completed_at=completed_at,
     )
     try:
         return save_harmonization_job(
@@ -344,12 +346,14 @@ def fail_harmonization_job(
 ) -> None:
     try:
         loaded = RunAuthority(workflow_storage, user, accepted_job).require_current()
+        completed_at = datetime.now(UTC)
         failed = replace(
             loaded.job,
             status=HarmonizeStatus.FAILED,
             detail="Harmonization failed. Please retry.",
             job_id_available=False,
-            lease_expires_at=datetime.now(UTC),
+            lease_expires_at=completed_at,
+            completed_at=completed_at,
         )
         save_harmonization_job(
             workflow_storage,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -135,6 +136,9 @@ async def test_cleanup_failure_does_not_consume_the_next_job_slot(
     # Then: cleanup failure from the first job did not block new work.
     assert second.job.file_id == second_file_id
     assert second.job.status is HarmonizeStatus.FAILED
+    assert first.job.completed_at is not None
+    completed_elapsed = first.job.elapsed_seconds()
+    assert first.job.elapsed_seconds(now=first.job.completed_at + timedelta(days=1)) == completed_elapsed
 
 
 async def test_heartbeat_retries_after_a_transient_storage_error(

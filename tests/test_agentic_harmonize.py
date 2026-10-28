@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +122,54 @@ def test_agentic_defaults_use_bedrock_gpt_56_with_high_reasoning() -> None:
     assert config.reasoning_effort == "high"
     assert config.exploration_turns == 10
     assert config.max_workers == 100
+
+
+def test_agentic_batch_logs_effective_worker_limit(monkeypatch, caplog) -> None:
+    requests = tuple(
+        TermHarmonizationRequest(
+            cde="diagnosis",
+            input_term=term,
+            permissible_values=("Known",),
+            context="Target CDE: diagnosis",
+        )
+        for term in ("alpha", "beta")
+    )
+    monkeypatch.setattr(
+        "src.integrations.agentic_harmonize.make_provider_client",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "src.integrations.agentic_harmonize.harmonize_term",
+        lambda _client, _index, term, **kwargs: _prediction(term, "Known"),
+    )
+    caplog.set_level(logging.INFO, logger="src.integrations.agentic_harmonize")
+
+    responses = AgenticTermHarmonizer(
+        AgenticHarmonizeConfig(region="us-east-2", max_workers=1)
+    ).harmonize(requests)
+
+    assert len(responses) == 2
+    started = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "harmonization.agentic_batch.started"
+    )
+    completed = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "harmonization.agentic_batch.completed"
+    )
+    assert started.term_count == 2
+    assert started.worker_count == 1
+    assert started.configured_worker_limit == 1
+    assert started.exploration_turns == 10
+    assert started.explorer_model == "gpt-5.6-luna"
+    assert started.shortlister_model == "gpt-5.6-luna"
+    assert started.selector_model == "gpt-5.6-sol"
+    assert completed.term_count == 2
+    assert completed.worker_count == 1
+    assert completed.configured_worker_limit == 1
+    assert completed.duration_ms >= 0
 
 
 def test_agentic_harmonization_collapses_duplicates_only_within_each_column(
@@ -481,13 +530,17 @@ def test_unavailable_cache_does_not_block_bedrock_or_the_result(
     assert read_tabular(output).rows == [["Matched"]]
 
 
-def test_service_uses_injected_provider_for_deterministic_output(tmp_path: Path) -> None:
+def test_service_uses_injected_provider_for_deterministic_output(
+    tmp_path: Path,
+    caplog,
+) -> None:
     # Given a deterministic term provider and one non-exact source term.
     source = tmp_path / "source.csv"
     source.write_text("diagnosis\nunknown\n", encoding="utf-8")
     output = tmp_path / "output.csv"
     provider = _DeterministicProvider()
     service = FileHarmonizationService(provider)
+    caplog.set_level(logging.INFO, logger="src.integrations.harmonize")
 
     # When the real harmonization service runs the dataset.
     result = service.run(
@@ -511,6 +564,13 @@ def test_service_uses_injected_provider_for_deterministic_output(tmp_path: Path)
             context="Source column: diagnosis\nTarget CDE: diagnosis",
         )
     ]
+    provider_log = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "harmonization.provider.completed"
+    )
+    assert provider_log.provider_terms == 1
+    assert provider_log.duration_ms >= 0
 
 
 def test_use_cache_false_skips_cache_read_and_write(tmp_path: Path) -> None:
