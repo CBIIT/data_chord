@@ -16,6 +16,9 @@ import {
   mockHarmonizeSuccess,
   mockHarmonizeFailure,
   seedHarmonization,
+  STAGE_THREE_FILE_ID,
+  stageThreeColumn,
+  mockCompletedStageThreeJob,
   parseDownloadedCsv,
   parseDownloadedCsvTable,
   parseDownloadedTabular,
@@ -226,6 +229,7 @@ const _openStage2SearchHarness = async (page) => {
 
 test('no-recommendation card warns when its displayed source value is not permissible', async ({ page }, testInfo) => {
   const fileId = '0123456789abcdef0123456789abcdef';
+  const longOriginal = 'Lung Cancer With A Very Long Descriptor That Wraps Across Several Lines On Narrow Cards';
   const wrappedValues = [
     'Adenocarcinoma, Metastatic NOS',
     'Glioma, Malignant, Diffuse Pediatric-Type High-Grade Glioma, H3-Wildtype And IDH-Wildtype, High-Grade Glioma',
@@ -258,7 +262,7 @@ test('no-recommendation card warns when its displayed source value is not permis
               manualOverride: null,
             },
             {
-              originalValue: 'Lung Cancer',
+              originalValue: longOriginal,
               harmonizedValue: null,
               matchFidelity: 'none',
               isChanged: false,
@@ -271,7 +275,7 @@ test('no-recommendation card warns when its displayed source value is not permis
             },
           ],
         }],
-        columnPVs: { col_0000: ['Carcinoma NOS', 'Lung Cancer', ...wrappedValues] },
+        columnPVs: { col_0000: ['Carcinoma NOS', longOriginal, ...wrappedValues] },
         totalOriginalRows: 10000,
         reviewState: null,
       }),
@@ -294,16 +298,62 @@ test('no-recommendation card warns when its displayed source value is not permis
   await waitForReviewRows(page);
   const cards = page.locator('.row-cell.no-recommendation');
   const rejectedCard = cards.filter({ has: page.locator('.original-context-value', { hasText: 'adamantinoma' }) });
-  const permittedCard = cards.filter({ has: page.locator('.original-context-value', { hasText: 'Lung Cancer' }) });
+  const permittedCard = cards.filter({ has: page.locator('.original-context-value', { hasText: longOriginal }) });
+  const diagnosisTab = page.locator('.batch-progress-item.column-pill');
 
   // Then: each displayed source has one clear conformance state and no question marker
   await expect(cards).toHaveCount(2);
+  await expect(diagnosisTab).toHaveAttribute('aria-label', /values not in the approved list/);
+  await expect(diagnosisTab.locator('.tab-review-warning')).toBeVisible();
   await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
   await expect(rejectedCard.getByRole('button', { name: 'Restore original value' })).toBeDisabled();
   await expect(rejectedCard.locator('.card-column-title')).toHaveCount(0);
   await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+
+  // Then: AI quality is in the header, while approval sits beside the editable value.
+  await expect(rejectedCard.locator('.card-header-row .fidelity-indicator')).toBeVisible();
+  await expect(rejectedCard.locator('.card-header-row .entry-row-label')).toBeVisible();
+  await expect(rejectedCard.locator('.card-body .card-value-status .pv-warning-icon')).toBeVisible();
+  await expect(rejectedCard.locator('.card-body .pv-combobox-link')).toHaveText('adamantinoma');
+  await expect(rejectedCard.locator('.card-footer .original-context-value')).toHaveText('adamantinoma');
+  await expect(rejectedCard.locator('.card-footer .revert-btn')).toBeDisabled();
+  await expect(rejectedCard.locator('.target-value-label')).toHaveCount(0);
+  const cardGeometry = await rejectedCard.evaluate((card) => {
+    const body = card.querySelector('.card-body').getBoundingClientRect();
+    const rail = card.querySelector('.card-value-status').getBoundingClientRect();
+    const value = card.querySelector('.target-value-wrapper').getBoundingClientRect();
+    return { railHeight: rail.height, bodyHeight: body.height, railRight: rail.right, valueLeft: value.left };
+  });
+  expect(cardGeometry.railHeight).toBeCloseTo(cardGeometry.bodyHeight, 0);
+  expect(cardGeometry.railRight).toBeLessThanOrEqual(cardGeometry.valueLeft);
+  const valueComparison = await permittedCard.evaluate((card) => {
+    const current = card.querySelector('.pv-combobox-link');
+    const original = card.querySelector('.original-context-value');
+    const currentStyle = getComputedStyle(current);
+    const originalStyle = getComputedStyle(original);
+    return {
+      horizontalOffset: Math.abs(current.getBoundingClientRect().left - original.getBoundingClientRect().left),
+      currentFont: [currentStyle.fontFamily, currentStyle.fontSize, currentStyle.lineHeight],
+      originalFont: [originalStyle.fontFamily, originalStyle.fontSize, originalStyle.lineHeight],
+      currentWeight: currentStyle.fontWeight,
+      originalWeight: originalStyle.fontWeight,
+      originalColor: originalStyle.color,
+      originalHeight: original.clientHeight,
+      originalContentHeight: original.scrollHeight,
+    };
+  });
+  expect(valueComparison.horizontalOffset).toBeLessThan(2);
+  expect(valueComparison.originalFont).toEqual(valueComparison.currentFont);
+  expect(valueComparison.currentWeight).toBe('600');
+  expect(valueComparison.originalWeight).toBe('500');
+  expect(valueComparison.originalColor).toBe('rgb(71, 85, 105)');
+  expect(valueComparison.originalContentHeight).toBeLessThanOrEqual(valueComparison.originalHeight + 1);
+  const borderWidth = async () => rejectedCard.evaluate((card) => Number.parseFloat(getComputedStyle(card).borderLeftWidth));
+  expect(await borderWidth()).toBeGreaterThanOrEqual(4);
+  expect(await permittedCard.evaluate((card) => Number.parseFloat(getComputedStyle(card).borderLeftWidth)))
+    .toBeLessThan(4);
 
   // When: the reviewer focuses the status icon.
   await rejectedCard.locator('.pv-warning-icon').focus();
@@ -315,6 +365,17 @@ test('no-recommendation card warns when its displayed source value is not permis
   await expect(rejectedCard.locator('.pv-conformant-icon')).toBeHidden();
   await expect(permittedCard.locator('.pv-warning-icon')).toBeHidden();
   await expect(permittedCard.locator('.pv-conformant-icon')).toBeVisible();
+  // When: the reviewer hovers over the approved-value mark.
+  await permittedCard.locator('.pv-conformant-icon').hover();
+  // Then: it explains the status without acting like the value editor.
+  await expect(page.getByRole('tooltip')).toHaveText('The current value is in the approved list.');
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await permittedCard.locator('.pv-conformant-icon').focus();
+  await expect(page.getByRole('tooltip')).toHaveText('The current value is in the approved list.');
+  expect(await permittedCard.locator('.pv-conformant-icon').evaluate((icon) => getComputedStyle(icon).cursor)).toBe('help');
+  await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
+  await page.keyboard.press('Escape');
   for (const card of await cards.all()) {
     const markerContent = await card.evaluate((element) => getComputedStyle(element, '::after').content);
     expect(markerContent).toBe('none');
@@ -332,7 +393,9 @@ test('no-recommendation card warns when its displayed source value is not permis
   // Then: the card becomes conformant, stays a no-recommendation card, and saves the override
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeHidden();
   await expect(rejectedCard.locator('.pv-conformant-icon')).toBeVisible();
+  await expect(diagnosisTab.locator('.tab-review-warning')).toHaveCount(0);
   await expect(rejectedCard).toHaveClass(/no-recommendation/);
+  expect(await borderWidth()).toBeLessThan(4);
   expect(savedOverrides.overrides['8692'].col_0000.human_value).toBe('Carcinoma NOS');
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('You changed the output.');
   await expect(rejectedCard.getByRole('button', { name: 'Restore original value' })).toBeEnabled();
@@ -343,6 +406,8 @@ test('no-recommendation card warns when its displayed source value is not permis
   // Then: the source and its warning return, with the correct no-match explanation.
   await expect(rejectedCard.locator('.pv-combobox-link')).toHaveText('adamantinoma');
   await expect(rejectedCard.locator('.pv-warning-icon')).toBeVisible();
+  await expect(diagnosisTab.locator('.tab-review-warning')).toBeVisible();
+  expect(await borderWidth()).toBeGreaterThanOrEqual(4);
   await expect(rejectedCard.locator('.card-result-note')).toHaveText('No match found. Source value kept. Choose an approved value.');
   await expect(page.locator('.pv-selection-dialog')).toHaveCount(0);
 
@@ -361,6 +426,14 @@ test('no-recommendation card warns when its displayed source value is not permis
     const bounds = await rejectedCard.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    const alignedSource = await permittedCard.evaluate((card) => ({
+      currentLeft: card.querySelector('.pv-combobox-link').getBoundingClientRect().left,
+      originalLeft: card.querySelector('.original-context-value').getBoundingClientRect().left,
+      originalHeight: card.querySelector('.original-context-value').clientHeight,
+      originalContentHeight: card.querySelector('.original-context-value').scrollHeight,
+    }));
+    expect(Math.abs(alignedSource.currentLeft - alignedSource.originalLeft)).toBeLessThan(2);
+    expect(alignedSource.originalContentHeight).toBeLessThanOrEqual(alignedSource.originalHeight + 1);
     await expect(rejectedCard.locator('.fidelity-indicator')).toBeVisible();
     await rejectedCard.locator('.pv-warning-icon').focus();
     await rejectedCard.locator('.fidelity-indicator').focus();
@@ -368,6 +441,8 @@ test('no-recommendation card warns when its displayed source value is not permis
     const tooltipBounds = await page.getByRole('tooltip').boundingBox();
     expect(tooltipBounds.x).toBeGreaterThanOrEqual(0);
     expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(width);
+    await page.keyboard.press('Escape');
+    await page.mouse.move(0, 0);
     await page.screenshot({ path: testInfo.outputPath(`review-cards-${width}.png`) });
   }
 
@@ -392,6 +467,213 @@ test('no-recommendation card warns when its displayed source value is not permis
     expect(dimensions.radius).toBe('0px');
   }
   await rejectedCard.screenshot({ path: testInfo.outputPath('wrapped-value.png') });
+});
+
+test('column tabs flag only batches with values outside the approved list', async ({ page }) => {
+  const fileId = '0123456789abcdef0123456789abcdef';
+  const approved = Array.from({ length: 16 }, (_, index) => `Approved ${index + 1}`);
+  const transformation = (value, rowIndex, pvSetAvailable = true) => ({
+    originalValue: value,
+    harmonizedValue: null,
+    matchFidelity: 'none',
+    isChanged: false,
+    recommendationType: 'no_recommendation',
+    isPVConformant: pvSetAvailable && value !== 'Needs correction',
+    pvSetAvailable,
+    topSuggestions: [],
+    rowIndices: [rowIndex],
+    manualOverride: null,
+  });
+  const column = (key, label, index, transformations) => ({
+    columnKey: key,
+    columnLabel: label,
+    targetCdeKey: label,
+    targetCdeLabel: label,
+    sourceColumnIndex: index,
+    termCount: transformations.length,
+    termsWithChanges: 0,
+    transformations,
+  });
+
+  // Given: an unapproved value is in the second diagnosis batch, while
+  // another column is approved and a third has no approved list.
+  await page.route('**/stage-4/rows', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        columns: [
+          column('col_0000', 'diagnosis', 0, [
+            ...approved.map((value, index) => transformation(value, index + 1)),
+            transformation('Needs correction', 17),
+          ]),
+          column('col_0001', 'sample_type', 1, [transformation('Known type', 18)]),
+          column('col_0002', 'notes', 2, [transformation('Free text', 19, false)]),
+        ],
+        columnPVs: { col_0000: approved, col_0001: ['Known type'] },
+        totalOriginalRows: 19,
+        reviewState: null,
+      }),
+    });
+  });
+
+  // When: the reviewer opens the first diagnosis batch.
+  await page.goto(`/stage-4?file_id=${fileId}`);
+  await waitForReviewRows(page);
+
+  // Then: only the second diagnosis tab has the warning, even before it is opened.
+  const tabs = page.locator('.batch-progress-item.column-pill');
+  await expect(tabs).toHaveCount(4);
+  await expect(tabs).toContainText(['diagnosis (1/2)', 'diagnosis (2/2)', 'sample_type', 'notes']);
+  await expect(tabs.nth(0).locator('.tab-review-warning')).toHaveCount(0);
+  await expect(tabs.nth(1).locator('.tab-review-warning')).toBeVisible();
+  await expect(tabs.nth(1)).toHaveAttribute('aria-label', /values not in the approved list/);
+  await expect(tabs.nth(2).locator('.tab-review-warning')).toHaveCount(0);
+  await expect(tabs.nth(3).locator('.tab-review-warning')).toHaveCount(0);
+
+  // When: the reviewer opens the marked batch.
+  await tabs.nth(1).click();
+  // Then: its card shows the same unapproved-value condition.
+  await expect(page.locator('.row-cell.is-nonconformant')).toHaveCount(1);
+  await expect(page.locator('.pv-warning-icon')).toBeVisible();
+});
+
+test('Stage 4 shows large square marks for AI match quality', async ({ page }) => {
+  const fileId = '0123456789abcdef0123456789abcdef';
+  const matchCases = [
+    { fidelity: 'strong', original: 'Ductal carcinoma, NOS', current: 'Ductal Carcinoma NOS' },
+    { fidelity: 'partial', original: 'Unclassified tumor, malignant', current: 'Malignant Tumor' },
+    { fidelity: 'approximate', original: 'Adenocarcinoma, metastatic, NOS', current: 'Adenocarcinoma, Metastatic NOS' },
+    { fidelity: 'none', original: 'adamantinoma', current: null },
+    { fidelity: 'strong', original: 'Carcinoma, NOS', current: 'Carcinoma NOS' },
+  ];
+
+  // Given: Stage 4 has one result at each match-quality level.
+  await page.route('**/stage-4/rows', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        columns: [{
+          columnKey: 'col_0000',
+          columnLabel: 'diagnosis',
+          targetCdeKey: 'primary_diagnosis',
+          targetCdeLabel: 'primary_diagnosis',
+          sourceColumnIndex: 0,
+          termCount: 5,
+          termsWithChanges: 4,
+          transformations: matchCases.map((entry, index) => ({
+            originalValue: entry.original,
+            harmonizedValue: entry.current,
+            matchFidelity: entry.fidelity,
+            isChanged: entry.current !== null,
+            recommendationType: entry.current === null ? 'no_recommendation' : 'ai_changed',
+            isPVConformant: entry.current !== null,
+            pvSetAvailable: true,
+            topSuggestions: [],
+            rowIndices: [index],
+            manualOverride: null,
+          })),
+        }],
+        columnPVs: { col_0000: matchCases.map((entry) => entry.current).filter(Boolean) },
+        totalOriginalRows: 5,
+        reviewState: { review_state: { column_mode: { batch_size: 5 } } },
+      }),
+    });
+  });
+
+  // When: the reviewer opens the cards at desktop and phone widths.
+  await page.goto(`/stage-4?file_id=${fileId}`);
+  await waitForReviewRows(page);
+  const cards = page.locator('.column-mode-grid .row-cell');
+  await expect(cards).toHaveCount(5);
+  for (const width of [1600, 1300, 1120, 900, 650, 390, 320]) {
+    await page.setViewportSize({ width, height: 921 });
+
+    // Then: the selected grid size is a cap, and every card keeps usable text width.
+    const gridGeometry = await page.locator('.column-mode-grid').evaluate((grid) => {
+      const bounds = grid.getBoundingClientRect();
+      const cardBounds = [...grid.querySelectorAll('.row-cell')].map((card) => card.getBoundingClientRect());
+      return {
+        columns: cardBounds.filter((card) => Math.abs(card.top - cardBounds[0].top) < 1).length,
+        minCardWidth: Math.min(...cardBounds.map((card) => card.width)),
+        gridWidth: bounds.width,
+        rightEdge: Math.max(...cardBounds.map((card) => card.right)),
+        gridRight: bounds.right,
+      };
+    });
+    expect(gridGeometry.minCardWidth).toBeGreaterThanOrEqual(Math.min(260, gridGeometry.gridWidth) - 0.5);
+    expect(gridGeometry.rightEdge).toBeLessThanOrEqual(gridGeometry.gridRight + 1);
+    expect(gridGeometry.columns).toBeLessThanOrEqual(5);
+    if (width === 1600) expect(gridGeometry.columns).toBe(5);
+    if (width <= 390) expect(gridGeometry.columns).toBe(1);
+
+    // Then: filled square count encodes quality; no match keeps its distinct minus icon.
+    for (const [index, entry] of matchCases.entries()) {
+      const icon = cards.nth(index).locator('.fidelity-indicator');
+      await expect(icon).toHaveAttribute('aria-label', `${entry.fidelity} AI match`);
+      if (entry.fidelity === 'none') {
+        await expect(icon.locator('svg circle')).toHaveCount(1);
+        await expect(icon.locator('svg rect')).toHaveCount(0);
+        continue;
+      }
+      const buttonWidth = await icon.evaluate((element) => element.getBoundingClientRect().width);
+      expect(buttonWidth).toBeGreaterThanOrEqual(65);
+      const squares = await icon.locator('svg rect').evaluateAll((elements) => elements.map((element) => ({
+        left: element.getBoundingClientRect().left,
+        right: element.getBoundingClientRect().right,
+        width: element.getBoundingClientRect().width,
+        height: element.getBoundingClientRect().height,
+        opacity: Number.parseFloat(getComputedStyle(element).opacity),
+      })));
+      expect(squares).toHaveLength(3);
+      const filledSquares = { strong: 3, partial: 2, approximate: 1 }[entry.fidelity];
+      expect(squares.map((square) => square.opacity)).toEqual(
+        [0, 1, 2].map((squareIndex) => squareIndex < filledSquares ? 1 : 0.2),
+      );
+      for (const square of squares) {
+        expect(square.width).toBeGreaterThanOrEqual(11.5);
+        expect(square.height).toBeGreaterThanOrEqual(11.5);
+      }
+      expect(squares[1].left - squares[0].right).toBeGreaterThanOrEqual(5.5);
+      expect(squares[2].left - squares[1].right).toBeGreaterThanOrEqual(5.5);
+    }
+    if (width === 1120) {
+      const originalComparison = await cards.nth(2).evaluate((card) => {
+        const current = card.querySelector('.pv-combobox-link');
+        const original = card.querySelector('.original-context-value');
+        const restore = card.querySelector('.restore-control');
+        const firstWord = 'Adenocarcinoma';
+        const range = document.createRange();
+        range.setStart(original.firstChild, 0);
+        range.setEnd(original.firstChild, firstWord.length);
+        return {
+          offset: Math.abs(current.getBoundingClientRect().left - original.getBoundingClientRect().left),
+          restoreRight: restore.getBoundingClientRect().right,
+          originalLeft: original.getBoundingClientRect().left,
+          firstWordLines: range.getClientRects().length,
+        };
+      });
+      expect(originalComparison.offset).toBeLessThan(2);
+      expect(originalComparison.restoreRight).toBeLessThan(originalComparison.originalLeft);
+      expect(originalComparison.firstWordLines).toBe(1);
+    }
+  }
+
+  // When: the browser text size increases, the minimum card width increases with it.
+  await page.addStyleTag({ content: ':root { font-size: 20px; }' });
+  for (const width of [1300, 390]) {
+    await page.setViewportSize({ width, height: 921 });
+    // Then: wide screens scale the card minimum; narrow phones show one full-width card.
+    const scaledGeometry = await page.locator('.column-mode-grid').evaluate((grid) => ({
+      gridWidth: grid.getBoundingClientRect().width,
+      cardWidth: grid.querySelector('.row-cell').getBoundingClientRect().width,
+      rightEdge: Math.max(...[...grid.querySelectorAll('.row-cell')].map((card) => card.getBoundingClientRect().right)),
+      gridRight: grid.getBoundingClientRect().right,
+    }));
+    expect(scaledGeometry.cardWidth).toBeGreaterThanOrEqual(Math.min(325, scaledGeometry.gridWidth) - 0.5);
+    expect(scaledGeometry.rightEdge).toBeLessThanOrEqual(scaledGeometry.gridRight + 1);
+  }
 });
 
 test('Stage 4 shows server recovery detail with a Stage 3 link', async ({ page }) => {
@@ -525,12 +807,12 @@ test('happy path flow: upload → analyze → harmonize → review → summary �
   const stageThreeOutcome = stageThreeTable.locator('tbody tr').filter({ hasText: 'col_a' });
   await expect(stageThreeOutcome).toContainText('0 of 2');
   await expect(stageThreeOutcome).toContainText('2 of 3');
-  await expect(page.locator('#stageThreeDial')).toHaveAttribute(
-    'aria-label',
-    'No unique values were checked against an approved list.',
+  await expect(page.locator('#stageThreeDial')).toHaveText('0');
+  await expect(page.getByRole('heading', { name: 'Harmonization complete' })).toBeVisible();
+  await expect(page.locator('#stageThreeHeadline')).toHaveText(
+    '0 unique values were checked against an approved list',
   );
-  await expect(page.locator('#stageThreeHeadline')).toHaveText('Harmonization complete');
-  await expect(page.getByText('No unique values were checked against an approved list.')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Unique value results' })).toBeHidden();
   await expect(page.getByText('Confidence', { exact: true })).toHaveCount(0);
 
   await page.click('#reviewButton');
@@ -674,15 +956,16 @@ test('completed Stage 3 shows the durable dial, action table, and remaining colu
   await page.goto(`/stage-3?file_id=${fileId}&job_id=${jobId}`);
 
   // Then: the result uses the durable display context and exact value partition.
-  await expect(page.locator('#stageThreeHeadline')).toContainText('successfully harmonized 1 value');
-  await expect(page.getByText('partner_submission.csv', { exact: true })).toBeVisible();
-  await expect(page.getByText('Checked against GDC 3.0', { exact: true })).toBeVisible();
-  await expect(page.locator('#stageThreeDial')).toHaveAttribute(
-    'aria-label',
-    'Of 6 unique values checked: 1 was successfully harmonized; 3 already matched; 2 could not be harmonized.',
-  );
-  await expect(page.locator('#stageThreeCheckedCount')).toHaveText('6');
-  await expect(page.locator('.stage-three-dial__content span')).toHaveText('unique values checked');
+  await expect(page.getByRole('heading', { name: 'Harmonization complete' })).toBeVisible();
+  await expect(page.locator('#stageThreeContext')).toHaveText('partner_submission.csv · 20 rows');
+  await expect(page.locator('#stageThreeDial')).toHaveText('66%');
+  await expect(page.locator('#stageThreeHeadline')).toHaveText('66% of 6 unique values now match GDC 3.0');
+  await expect(page.locator('#stageThreeHeadline strong')).toHaveText('GDC 3.0');
+  await expect(page.getByRole('list', { name: 'Unique value results' }).getByRole('listitem')).toHaveText([
+    '1 harmonized',
+    '3 already matched',
+    '2 not harmonized',
+  ]);
 
   const table = page.locator('[data-column-outcome-table] .column-outcome-table');
   await expect(table).toBeVisible();
@@ -698,6 +981,11 @@ test('completed Stage 3 shows the durable dial, action table, and remaining colu
     '0 of 1',
     '1 of 2',
   ]);
+  await expect(table.locator('tbody tr td:nth-child(4)')).toHaveText([
+    '1 unique value not harmonized',
+    '1 unique value not harmonized',
+    'All unique values now match',
+  ]);
   await expect(table).not.toContainText('already_matched');
   await expect(table).not.toContainText('not_checked');
 
@@ -705,7 +993,7 @@ test('completed Stage 3 shows the durable dial, action table, and remaining colu
   await expect(remaining).toContainText('2 columns passed through unchanged');
   await remaining.locator('summary').click();
   await expect(remaining.getByRole('heading', {
-    name: '1 value already matched the approved list',
+    name: '1 unique value already matched the approved list',
   })).toBeVisible();
   await expect(remaining.getByRole('heading', {
     name: '1 column has no approved list to check against',
@@ -721,6 +1009,174 @@ test('completed Stage 3 shows the durable dial, action table, and remaining colu
   // Then: the existing Stage 4 navigation contract remains unchanged.
   await page.waitForURL(/\/stage-4/);
 });
+
+const STAGE_THREE_SUMMARY_CASES = [
+  {
+    name: 'mixed counts',
+    counts: { harmonized: 37, matched: 9, unresolved: 6 },
+    dial: '88%',
+    headline: '88% of 52 unique values now match CCDI v2.1',
+    groups: [
+      ['37 harmonized', 'normal'],
+      ['9 already matched', 'normal'],
+      ['6 not harmonized', 'attention'],
+    ],
+    tableStatus: '6 unique values not harmonized',
+  },
+  {
+    name: 'nothing harmonized',
+    counts: { harmonized: 0, matched: 0, unresolved: 52 },
+    dial: '0%',
+    headline: '0% of 52 unique values now match CCDI v2.1',
+    groups: [
+      ['0 harmonized', 'zero'],
+      ['0 already matched', 'zero'],
+      ['52 not harmonized', 'attention'],
+    ],
+    tableStatus: '52 unique values not harmonized',
+  },
+];
+
+for (const scenario of STAGE_THREE_SUMMARY_CASES) {
+  test(`Stage 3 summary shows ${scenario.name}`, async ({ page }) => {
+    const jobId = `stage-three-summary-${scenario.name.replaceAll(' ', '-')}`;
+    // Given: a completed job whose checked unique values split into the scenario's three groups
+    await mockCompletedStageThreeJob(page, jobId, [stageThreeColumn(scenario.counts)]);
+    await page.goto('/stage-1');
+    await expect(page.locator('#stageThreeComplete')).toHaveCount(0);
+
+    // When: Stage 3 loads the completed result
+    await page.goto(`/stage-3?file_id=${STAGE_THREE_FILE_ID}&job_id=${jobId}`);
+
+    // Then: the dial shows only the rounded-down share, the headline names the standard, and all groups render
+    await expect(page.getByRole('heading', { name: 'Harmonization complete' })).toBeVisible();
+    await expect(page.locator('#stageThreeContext')).toHaveText('clinical_samples.csv · 1,204 rows');
+    await expect(page.locator('#stageThreeDial')).toHaveText(scenario.dial);
+    await expect(page.locator('#stageThreeDial')).toHaveAttribute('aria-hidden', 'true');
+    await expect(page.locator('#stageThreeHeadline')).toHaveText(scenario.headline);
+    const groups = page.getByRole('list', { name: 'Unique value results' }).getByRole('listitem');
+    await expect(groups).toHaveText(scenario.groups.map(([text]) => text));
+    for (const [index, [, groupState]] of scenario.groups.entries()) {
+      await expect(groups.nth(index)).toHaveAttribute('data-state', groupState);
+    }
+    await expect(page.locator('#stageThreeResultMessage')).toBeHidden();
+    await expect(page.locator('[data-column-outcome-table] tbody tr td:nth-child(4)')).toHaveText([
+      scenario.tableStatus,
+    ]);
+  });
+}
+
+test('Stage 3 summary says "the approved list" when the job recorded no standard name', async ({ page }) => {
+  const jobId = 'stage-three-summary-no-standard-name';
+  // Given: a completed mixed job that recorded no reference model label or version
+  await mockCompletedStageThreeJob(
+    page,
+    jobId,
+    [stageThreeColumn({ harmonized: 37, matched: 9, unresolved: 6 })],
+    { label: null, version: null },
+  );
+  await page.goto('/stage-1');
+  await expect(page.locator('#stageThreeComplete')).toHaveCount(0);
+
+  // When: Stage 3 loads the completed result
+  await page.goto(`/stage-3?file_id=${STAGE_THREE_FILE_ID}&job_id=${jobId}`);
+
+  // Then: the headline ends with the generic list name and nothing is shown as a standard name
+  await expect(page.locator('#stageThreeHeadline')).toHaveText('88% of 52 unique values now match the approved list');
+  await expect(page.locator('#stageThreeHeadline strong')).toHaveCount(0);
+  await expect(page.locator('#stageThreeContext')).toHaveText('clinical_samples.csv · 1,204 rows');
+});
+
+test('Stage 3 summary hides the empty table note when every value already matched', async ({ page }) => {
+  const jobId = 'stage-three-summary-all-matched';
+  // Given: a completed job whose checked values all matched the approved list before harmonization
+  await mockCompletedStageThreeJob(page, jobId, [
+    stageThreeColumn({ harmonized: 0, matched: 52, unresolved: 0 }),
+  ]);
+  await page.goto('/stage-1');
+  await expect(page.locator('#stageThreeComplete')).toHaveCount(0);
+
+  // When: Stage 3 loads the completed result
+  await page.goto(`/stage-3?file_id=${STAGE_THREE_FILE_ID}&job_id=${jobId}`);
+
+  // Then: the dial shows 100%, the empty-table note is hidden, and the column is listed as unchanged
+  await expect(page.locator('#stageThreeDial')).toHaveText('100%');
+  await expect(page.locator('#stageThreeHeadline')).toHaveText('100% of 52 unique values now match CCDI v2.1');
+  await expect(page.getByRole('list', { name: 'Unique value results' }).getByRole('listitem')).toHaveText([
+    '0 harmonized',
+    '52 already matched',
+    '0 not harmonized',
+  ]);
+  await expect(page.getByText('No reviewed columns are available for this dataset.')).toBeHidden();
+  await expect(page.locator('[data-remaining-columns]')).toContainText('1 column passed through unchanged');
+});
+
+test('Stage 3 summary shows a gray dial when no values were checked', async ({ page }) => {
+  const jobId = 'stage-three-summary-none-checked';
+  // Given: a completed job whose only column has no approved list
+  await mockCompletedStageThreeJob(page, jobId, [
+    stageThreeColumn({ harmonized: 0, matched: 4, unresolved: 0, reviewStatus: 'not_checked' }),
+  ]);
+  await page.goto('/stage-1');
+  await expect(page.locator('#stageThreeComplete')).toHaveCount(0);
+
+  // When: Stage 3 loads the completed result
+  await page.goto(`/stage-3?file_id=${STAGE_THREE_FILE_ID}&job_id=${jobId}`);
+
+  // Then: the gray dial shows 0, the text beside it finishes that sentence once, and the groups are hidden
+  await expect(page.locator('#stageThreeDial')).toHaveText('0');
+  await expect(page.locator('#stageThreeDial')).toHaveClass(/stage-three-dial--empty/);
+  await expect(page.locator('#stageThreeHeadline')).toHaveText(
+    '0 unique values were checked against an approved list',
+  );
+  await expect(page.locator('#stageThreeHeadline')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Unique value results' })).toBeHidden();
+  await expect(page.locator('#stageThreeResultMessage')).toBeHidden();
+  await expect(page.getByText('No reviewed columns are available for this dataset.')).toBeHidden();
+  await expect(page.locator('[data-remaining-columns]')).toContainText('1 column passed through unchanged');
+});
+
+const INCONSISTENT_COUNT_STANDARDS = [
+  {
+    name: 'names the recorded standard in the meta line',
+    standard: { label: 'CCDI', version: 'v2.1' },
+    context: 'clinical_samples.csv · 1,204 rows · Checked against CCDI v2.1',
+  },
+  {
+    name: 'omits the standard from the meta line when no name was recorded',
+    standard: { label: null, version: 'v2.1' },
+    context: 'clinical_samples.csv · 1,204 rows',
+  },
+];
+
+for (const scenario of INCONSISTENT_COUNT_STANDARDS) {
+  test(`Stage 3 summary without exact groups ${scenario.name}`, async ({ page }) => {
+    const jobId = `stage-three-summary-inconsistent-${scenario.standard.label ?? 'unnamed'}`;
+    // Given: a completed job that reports more harmonized and unresolved values than it checked
+    const column = { ...stageThreeColumn({ harmonized: 4, matched: 0, unresolved: 3 }), unique_terms: 5 };
+    expect(column.successfully_harmonized_terms + column.non_conformant_terms).toBeGreaterThan(column.unique_terms);
+    await mockCompletedStageThreeJob(page, jobId, [column], scenario.standard);
+
+    // When: Stage 3 loads the completed result
+    await page.goto(`/stage-3?file_id=${STAGE_THREE_FILE_ID}&job_id=${jobId}`);
+
+    // Then: the page treats the result like an earlier job instead of drawing a false partition
+    await expect(page.locator('#stageThreeDial')).toBeHidden();
+    await expect(page.locator('#stageThreeHeadline')).toBeHidden();
+    await expect(page.getByRole('list', { name: 'Unique value results' })).toBeHidden();
+    await expect(page.locator('#stageThreeResultMessage')).toHaveText(
+      'Detailed value groups are not available for this result. Continue to Verify to review the changes.',
+    );
+    // And: with the headline hidden, only the meta line can name the standard
+    await expect(page.locator('#stageThreeContext')).toHaveText(scenario.context);
+    // And: the label, message, and meta line read top to bottom
+    const label = await page.getByRole('heading', { level: 1, name: 'Harmonization complete' }).boundingBox();
+    const message = await page.locator('#stageThreeResultMessage').boundingBox();
+    const context = await page.locator('#stageThreeContext').boundingBox();
+    expect(label.y + label.height).toBeLessThanOrEqual(message.y);
+    expect(message.y + message.height).toBeLessThanOrEqual(context.y);
+  });
+}
 
 test('an earlier completed Stage 3 job does not invent detailed value groups', async ({ page }) => {
   const fileId = '0123456789abcdef0123456789abcdef';
@@ -739,6 +1195,8 @@ test('an earlier completed Stage 3 job does not invent detailed value groups', a
           total_terms: 2,
           changed_terms: 1,
           non_conformant_terms: 0,
+          reference_model_label: 'GDC',
+          reference_model_version: '3.0',
           match_fidelity_counts: [],
           column_breakdowns: [{
             column_name: 'legacy_column',
@@ -768,9 +1226,14 @@ test('an earlier completed Stage 3 job does not invent detailed value groups', a
   await page.goto(`/stage-3?file_id=${fileId}&job_id=${jobId}`);
 
   // Then: the page preserves useful results without inventing a dial partition.
-  await expect(page.locator('#stageThreeHeadline')).toHaveText('Harmonization complete');
-  await expect(page.locator('#stageThreeDial')).not.toBeVisible();
-  await expect(page.getByText('Detailed value groups are not available for this earlier result.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Harmonization complete' })).toBeVisible();
+  await expect(page.locator('#stageThreeDial')).toBeHidden();
+  await expect(page.locator('#stageThreeHeadline')).toBeHidden();
+  await expect(page.locator('#stageThreeContext')).toHaveText('2 rows · Checked against GDC 3.0');
+  await expect(page.getByRole('list', { name: 'Unique value results' })).toBeHidden();
+  await expect(page.getByText(
+    'Detailed value groups are not available for this result. Continue to Verify to review the changes.',
+  )).toBeVisible();
   await expect(page.locator('[data-column-outcome-table]')).toContainText('Not recorded');
   await expect(page.locator('#reviewButton')).toBeEnabled();
 });
@@ -1780,6 +2243,23 @@ test('an override for a repeated value reaches every matching row', async ({ pag
     has: page.locator('.original-context-value', { hasText: 'Foo' }),
   });
   await expect(card.locator('.entry-row-label')).toHaveText('60 rows');
+  const plainTextComparison = await card.evaluate((element) => {
+    const current = element.querySelector('.target-value-input');
+    const original = element.querySelector('.original-context-value');
+    const currentStyle = getComputedStyle(current);
+    const originalStyle = getComputedStyle(original);
+    return {
+      horizontalOffset: Math.abs(current.getBoundingClientRect().left - original.getBoundingClientRect().left),
+      currentFont: [currentStyle.fontFamily, currentStyle.fontSize, currentStyle.lineHeight],
+      originalFont: [originalStyle.fontFamily, originalStyle.fontSize, originalStyle.lineHeight],
+      currentWeight: currentStyle.fontWeight,
+      originalWeight: originalStyle.fontWeight,
+    };
+  });
+  expect(plainTextComparison.horizontalOffset).toBeLessThan(2);
+  expect(plainTextComparison.originalFont).toEqual(plainTextComparison.currentFont);
+  expect(plainTextComparison.currentWeight).toBe('600');
+  expect(plainTextComparison.originalWeight).toBe('500');
   // When: the row count is selected, only source context opens.
   await card.locator('.entry-row-label').click();
   // Then: the popup shows the matching source rows, not the value editor.
@@ -1828,6 +2308,12 @@ test('whitespace-significant terms remain distinct', async ({ page }) => {
   await page.selectOption('#reviewModeSelect', 'row');
   await page.click('#settingsCloseButton');
   const row = page.locator('.row-mode-row').first();
+  const rowCard = row.locator('.row-cell:has(.target-value-input)').first();
+  const rowAlignment = await rowCard.evaluate((element) => ({
+    currentLeft: element.querySelector('.target-value-input').getBoundingClientRect().left,
+    originalLeft: element.querySelector('.original-context-value').getBoundingClientRect().left,
+  }));
+  expect(Math.abs(rowAlignment.currentLeft - rowAlignment.originalLeft)).toBeLessThan(2);
   await row.locator('.target-value-input').fill('Quux');
   await page.waitForResponse((response) => response.url().includes('/stage-4/overrides') && response.ok());
 
@@ -2094,6 +2580,12 @@ test('autosave persists overrides and review settings across reloads', async ({ 
   await expect(page.locator('.row-mode-wrapper')).toBeVisible();
   const restoredInput = page.locator('.target-value-input').first();
   await expect(restoredInput).toHaveValue('Persisted');
+  const restoredCard = page.locator('.row-mode-wrapper .row-cell').first();
+  await expect(restoredCard.locator('.card-header-row .fidelity-indicator')).toBeVisible();
+  await expect(restoredCard.locator('.card-header-row .card-column-title')).toBeVisible();
+  await expect(restoredCard.locator('.card-body .card-neutral-status')).toBeVisible();
+  await expect(restoredCard).not.toHaveClass(/is-nonconformant/);
+  await expect(restoredCard.locator('.card-footer .revert-btn')).toBeEnabled();
   const version = loaded.headers().etag;
   expect(version).toBeTruthy();
   expect(legacyOverrideReads).toEqual([]);
