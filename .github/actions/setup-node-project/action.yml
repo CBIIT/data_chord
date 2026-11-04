@@ -1,0 +1,22 @@
+name: Set up DataChord Node project
+description: Install the pinned Node and npm toolchain with locked dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        # Security: Node must be new enough to run npm package age enforcement.
+        node-version: "24.5.0"
+        cache: npm
+        cache-dependency-path: package-lock.json
+
+    - name: Install pinned npm
+      shell: bash
+      # Security: npm 11.10+ enforces min-release-age from .npmrc.
+      run: npm install -g npm@11.11.1
+
+    - name: Install locked Node dependencies
+      shell: bash
+      run: npm ci
