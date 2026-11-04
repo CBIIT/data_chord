@@ -7,6 +7,8 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "bootstrap-cloud-one.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-image.yml"
+PYTHON_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-python-project" / "action.yml"
+NODE_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-node-project" / "action.yml"
 DOCKERFILE = ROOT / "Dockerfile"
 
 
@@ -141,7 +143,28 @@ def test_ci_builds_and_smoke_tests_the_production_container() -> None:
     assert "import backend.app.main, numpy, pandas, pyarrow" in workflow
     assert "github.event_name == 'pull_request'" in workflow
     assert "uses: ./.github/workflows/publish-image.yml" in workflow
-    assert "if: ${{ github.event_name == 'push' }}" in workflow
+    assert "if: ${{ github.event_name == 'push' && needs.required.result == 'success' }}" in workflow
+
+
+def test_ci_consolidates_setup_and_exposes_one_stable_required_gate() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    python_setup = PYTHON_SETUP_ACTION.read_text(encoding="utf-8")
+    node_setup = NODE_SETUP_ACTION.read_text(encoding="utf-8")
+
+    assert "\n  quality:\n" in workflow
+    for retired_job in ("js-check", "test-js", "type-check", "lint", "security"):
+        assert f"\n  {retired_job}:\n" not in workflow
+    assert workflow.count("uses: ./.github/actions/setup-python-project") == 3
+    assert workflow.count("uses: ./.github/actions/setup-node-project") == 2
+    assert "\n  required:\n" in workflow
+    assert "name: Required CI gate" in workflow
+    assert "if: ${{ always() }}" in workflow
+    assert "needs: required" in workflow
+    assert "HEAD_REPOSITORY" in workflow
+    assert "enable-cache: true" in python_setup
+    assert "uv sync --frozen --all-extras" in python_setup
+    assert "cache: npm" in node_setup
+    assert "npm ci" in node_setup
 
 
 def test_main_publication_is_immutable_scanned_and_restorable() -> None:

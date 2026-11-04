@@ -50,40 +50,65 @@ jobs:
       - name: Check shell syntax
         run: bash scripts/check-shell-syntax.sh
 
-  js-check:
+  quality:
+    name: Code quality and security
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Set up Node project
+        uses: ./.github/actions/setup-node-project
+
+      # Fork pull requests cannot receive the private agentic source credential.
+      - name: Set up Python project
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: ./.github/actions/setup-python-project
         with:
-          # Security: keep CI on the same Node line as dependency-install jobs.
-          node-version: '24.5.0'
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
 
       - name: Check JavaScript syntax
         run: bash scripts/check-js-syntax.sh
 
-  test-js:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          # Security: Node must be new enough to run the pinned npm with package age enforcement.
-          node-version: '24.5.0'
-
-      - name: Install pinned npm
-        # Security: npm 11.10+ enforces min-release-age from .npmrc.
-        run: npm install -g npm@11.11.1
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Run JS tests
+      - name: Run JavaScript tests
         run: npm test
+
+      - name: Run JavaScript and TypeScript type check
+        run: npm run typecheck
+
+      - name: Run Python type check
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        run: uv run basedpyright --level error src/
+
+      - name: Run repository pre-commit hooks
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run vulture
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        run: uv run vulture
+
+      - name: Run bandit
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        run: uv run bandit -r src/ -c pyproject.toml
+
+      - name: Run dependency audit
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        run: >-
+          uv run pip-audit
+          --ignore-vuln CVE-2026-69247
 
   test:
     # Fork pull requests cannot receive the private agentic source credential.
@@ -94,165 +119,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Create agentic dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - name: Set up Python project
+        uses: ./.github/actions/setup-python-project
         with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.13.4"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        # Security: CI must use the committed lockfile, not silently resolve fresh packages.
-        run: uv sync --frozen --all-extras
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ steps.agentic-token.outputs.token }}@github.com/.insteadOf"
-          GIT_CONFIG_VALUE_0: "https://github.com/"
 
       - name: Run tests
         run: uv run pytest --tb=short
-
-  type-check:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Create agentic dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
-          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.13.4"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        # Security: CI must use the committed lockfile, not silently resolve fresh packages.
-        run: uv sync --frozen --all-extras
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ steps.agentic-token.outputs.token }}@github.com/.insteadOf"
-          GIT_CONFIG_VALUE_0: "https://github.com/"
-
-      - name: Run basedpyright
-        run: uv run basedpyright --level error src/
-
-  lint:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Create agentic dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
-          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.13.4"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        # Security: CI must use the committed lockfile, not silently resolve fresh packages.
-        run: uv sync --frozen --all-extras
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ steps.agentic-token.outputs.token }}@github.com/.insteadOf"
-          GIT_CONFIG_VALUE_0: "https://github.com/"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.5.0'
-
-      - name: Install pinned npm
-        # Security: npm 11.10+ enforces min-release-age from .npmrc.
-        run: npm install -g npm@11.11.1
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Run repository pre-commit hooks
-        run: uv run pre-commit run --all-files --show-diff-on-failure
-
-      - name: Run vulture
-        run: uv run vulture
-
-  security:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Create agentic dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
-          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.13.4"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        # Security: CI must use the committed lockfile, not silently resolve fresh packages.
-        run: uv sync --frozen --all-extras
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ steps.agentic-token.outputs.token }}@github.com/.insteadOf"
-          GIT_CONFIG_VALUE_0: "https://github.com/"
-
-      - name: Run bandit
-        run: uv run bandit -r src/ -c pyproject.toml
-
-      - name: Run dependency audit
-        run: >-
-          uv run pip-audit
-          --ignore-vuln CVE-2026-69247
 
   container:
     # Pull requests prove that the production image can build and start. A
@@ -304,44 +178,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Create agentic dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - name: Set up Python project
+        uses: ./.github/actions/setup-python-project
         with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          # Security: pin uv so dependency age enforcement stays stable in CI.
-          version: "0.13.4"
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        # Security: CI must use the committed lockfile, not silently resolve fresh packages.
-        run: uv sync --frozen --all-extras
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: "url.https://x-access-token:${{ steps.agentic-token.outputs.token }}@github.com/.insteadOf"
-          GIT_CONFIG_VALUE_0: "https://github.com/"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          # Security: Node must be new enough to run the pinned npm with package age enforcement.
-          node-version: '24.5.0'
-
-      - name: Install pinned npm
-        # Security: npm 11.10+ enforces min-release-age from .npmrc.
-        run: npm install -g npm@11.11.1
-
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Set up Node project
+        uses: ./.github/actions/setup-node-project
 
       - name: Get Playwright version
         id: playwright-version
@@ -365,18 +209,56 @@ jobs:
       - name: Run E2E tests
         run: npm run test:e2e
 
-  publish-image:
-    name: Publish reviewed main image
-    if: ${{ github.event_name == 'push' }}
+  required:
+    name: Required CI gate
+    if: ${{ always() }}
     needs:
       - infrastructure
-      - js-check
-      - test-js
+      - quality
       - test
-      - type-check
-      - lint
-      - security
       - e2e
+      - container
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the checks appropriate for this source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          CONTAINER_RESULT: ${{ needs.container.result }}
+        run: |
+          require_result() {
+            if [ "$2" != "$3" ]; then
+              echo "::error::$1 result was '$2'; expected '$3'"
+              return 1
+            fi
+          }
+
+          require_result infrastructure "${INFRASTRUCTURE_RESULT}" success
+          require_result quality "${QUALITY_RESULT}" success
+
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${HEAD_REPOSITORY}" != "${REPOSITORY}" ]; then
+            require_result test "${TEST_RESULT}" skipped
+            require_result e2e "${E2E_RESULT}" skipped
+            require_result container "${CONTAINER_RESULT}" skipped
+          else
+            require_result test "${TEST_RESULT}" success
+            require_result e2e "${E2E_RESULT}" success
+            if [ "${EVENT_NAME}" = "pull_request" ]; then
+              require_result container "${CONTAINER_RESULT}" success
+            else
+              require_result container "${CONTAINER_RESULT}" skipped
+            fi
+          fi
+
+  publish-image:
+    name: Publish reviewed main image
+    if: ${{ github.event_name == 'push' && needs.required.result == 'success' }}
+    needs: required
     permissions:
       contents: read
       id-token: write
