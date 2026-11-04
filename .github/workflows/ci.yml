@@ -257,9 +257,10 @@ jobs:
 
   publish-image:
     name: Publish reviewed main image
-    # `always()` prevents an intentionally skipped sibling (the PR-only
-    # container job) from suppressing this reusable workflow after the gate.
-    if: ${{ always() && github.event_name == 'push' && needs.required.result == 'success' }}
+    # The status function prevents an intentionally skipped sibling (the
+    # PR-only container job) from suppressing this workflow while still
+    # honoring operator cancellation.
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.required.result == 'success' }}
     needs: required
     permissions:
       contents: read

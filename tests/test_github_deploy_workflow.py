@@ -144,10 +144,7 @@ def test_ci_builds_and_smoke_tests_the_production_container() -> None:
     assert "import backend.app.main, numpy, pandas, pyarrow" in workflow
     assert "github.event_name == 'pull_request'" in workflow
     assert "uses: ./.github/workflows/publish-image.yml" in workflow
-    assert (
-        "if: ${{ always() && github.event_name == 'push' && "
-        "needs.required.result == 'success' }}" in workflow
-    )
+    assert "if: ${{ !cancelled() && github.event_name == 'push' && needs.required.result == 'success' }}" in workflow
 
 
 def test_ci_consolidates_setup_and_exposes_one_stable_required_gate() -> None:
@@ -179,8 +176,10 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
     assert "resolve_release_source.py" in workflow
     assert "ref: ${{ steps.source.outputs.image_source_sha }}" in workflow
+    assert "path: application-source" in workflow
     assert "repositories: agentic_harmonization" in workflow
     assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
+    assert '--tag "${image_uri}:${IMAGE_SOURCE_SHA}" application-source' in workflow
     assert "docker run --rm" in workflow
     assert "docker push" in workflow
     assert workflow.index("docker run --rm") < workflow.index("docker push")
@@ -188,3 +187,15 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert "ecr_image.py digest" in workflow
     assert "ecr_image.py scan" in workflow
     assert "--purpose publication" in workflow
+
+
+def test_historical_image_restore_keeps_current_release_tooling() -> None:
+    workflow = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    historical_checkout = workflow.index("ref: ${{ steps.source.outputs.image_source_sha }}")
+    build = workflow.index("docker build")
+    validator = workflow.index("infra/scripts/ecr_image.py digest")
+    assert historical_checkout < build < validator
+    assert "path: application-source" in workflow[historical_checkout:build]
+    assert "docker build" in workflow[build:validator]
+    assert "application-source\n" in workflow[build:validator]

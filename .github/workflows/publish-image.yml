@@ -77,6 +77,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ steps.source.outputs.image_source_sha }}
+          path: application-source
           persist-credentials: false
 
       - name: Create private dependency token
@@ -118,7 +119,7 @@ jobs:
             DOCKER_BUILDKIT=1 docker build \
               --provenance=false \
               --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
-              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" .
+              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" application-source
             docker run --rm \
               --entrypoint python \
               --env DEV_MODE=true \
