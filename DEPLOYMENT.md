@@ -103,6 +103,13 @@ DataChord image` workflow. Publication:
 3. waits for the ECR image scan and rejects any critical or high findings;
 4. records that image by its immutable SHA-256 digest.
 
+The workflows share the tested `infra/scripts/ecr_image.py` validator for ECR
+image and scan responses. Keep response parsing and vulnerability policy in
+that helper instead of embedding Python fragments in workflow YAML. The
+environment validator likewise owns the exact VPC/subnet response checks. A
+historical restore is built from a separate checkout so these release controls
+always come from current `main`, even when the application source is older.
+
 The manual `Plan and deploy DataChord to Cloud One` workflow then:
 
 1. resolves the already-published full-commit image and re-checks its completed

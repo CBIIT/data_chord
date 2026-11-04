@@ -10,6 +10,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _FIELDS = {
     "account_id",
@@ -159,6 +160,30 @@ def require_runtime(environment: Environment, digest: str) -> None:
         raise ConfigurationError("runtime image digest must be sha256 followed by 64 lowercase hex characters")
 
 
+def require_aws_subnets(environment: Environment, document: object) -> None:
+    """Verify that AWS returned the exact private, multi-AZ subnet contract."""
+
+    require_network(environment)
+    root = _object(document, "AWS subnet response")
+    raw_subnets = root.get("Subnets")
+    if not isinstance(raw_subnets, list):
+        raise ConfigurationError("AWS subnet response must contain a Subnets list")
+    subnets = [_object(item, "AWS subnet") for item in raw_subnets]
+    expected_ids = set(environment.private_subnet_ids)
+    returned_ids = {item.get("SubnetId") for item in subnets}
+    if returned_ids != expected_ids or len(subnets) != len(expected_ids):
+        raise ConfigurationError("AWS did not return exactly the configured private subnets")
+    if any(item.get("VpcId") != environment.vpc_id for item in subnets):
+        raise ConfigurationError("every subnet must belong to the configured VPC")
+    if any(item.get("State") != "available" for item in subnets):
+        raise ConfigurationError("every subnet must be available")
+    if any(item.get("MapPublicIpOnLaunch") is not False for item in subnets):
+        raise ConfigurationError("the internal dev preview requires private subnets")
+    zones = {item.get("AvailabilityZone") for item in subnets}
+    if None in zones or len(zones) < 2:
+        raise ConfigurationError("private subnets must span at least two Availability Zones")
+
+
 def _require_fields(document: dict[str, object]) -> None:
     extra = sorted(set(document) - _FIELDS)
     missing = sorted(_FIELDS - set(document))
@@ -199,9 +224,24 @@ def _boolean(document: dict[str, object], key: str) -> bool:
     return value
 
 
+def _object(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigurationError(f"{label} must be a JSON object")
+    return {str(key): item for key, item in value.items()}
+
+
+def _json(path: Path, label: str) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ConfigurationError(f"{label} does not exist: {path}") from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(f"{label} is unreadable: {path}") from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("validate", "get", "tofu-vars"))
+    parser.add_argument("action", choices=("validate", "get", "tofu-vars", "verify-subnets"))
     parser.add_argument("path", type=Path)
     parser.add_argument("target")
     parser.add_argument("stage")
@@ -223,34 +263,53 @@ def _validate_action(
         raise ConfigurationError("validate accepts only bootstrap, network, or runtime IMAGE_DIGEST")
 
 
+def _get_action(environment: Environment, field: str | None, extra: str | None) -> None:
+    if extra is not None:
+        raise ConfigurationError("get accepts exactly one field")
+    values: dict[str, str | tuple[str, ...] | None] = {
+        "account_id": environment.account_id,
+        "private_subnet_ids": environment.private_subnet_ids,
+        "region": environment.region,
+        "state_bucket_name": environment.state_bucket_name,
+        "state_key": environment.state_key,
+        "vpc_id": environment.vpc_id,
+    }
+    if field not in values:
+        raise ConfigurationError(f"unknown environment field: {field}")
+    value = values[field]
+    if value is None:
+        raise ConfigurationError(f"environment field is not populated: {field}")
+    if isinstance(value, tuple):
+        print(*value, sep="\n")
+    else:
+        print(value)
+
+
+def _tofu_vars_action(environment: Environment, mode: str | None, image_digest: str | None) -> None:
+    if mode == "bootstrap" and image_digest is None:
+        variables = environment.tofu_variables(runtime_enabled=False, image_digest=None)
+    elif mode == "runtime" and image_digest is not None:
+        require_runtime(environment, image_digest)
+        variables = environment.tofu_variables(runtime_enabled=True, image_digest=image_digest)
+    else:
+        raise ConfigurationError("tofu-vars requires bootstrap or runtime IMAGE_DIGEST")
+    print(json.dumps(variables, separators=(",", ":"), sort_keys=True))
+
+
 def main(arguments: list[str]) -> int:
     try:
         args = _parser().parse_args(arguments)
         environment = load(args.path, args.target, args.stage)
         if args.action == "validate":
             _validate_action(environment, args.value, args.image_digest)
-            return 0
-        if args.action == "get":
-            if args.image_digest is not None:
-                raise ConfigurationError("get accepts exactly one field")
-            values = {
-                "account_id": environment.account_id,
-                "region": environment.region,
-                "state_bucket_name": environment.state_bucket_name,
-                "state_key": environment.state_key,
-            }
-            if args.value not in values:
-                raise ConfigurationError(f"unknown environment field: {args.value}")
-            print(values[args.value])
-            return 0
-        if args.value == "bootstrap" and args.image_digest is None:
-            variables = environment.tofu_variables(runtime_enabled=False, image_digest=None)
-        elif args.value == "runtime" and args.image_digest is not None:
-            require_runtime(environment, args.image_digest)
-            variables = environment.tofu_variables(runtime_enabled=True, image_digest=args.image_digest)
+        elif args.action == "get":
+            _get_action(environment, args.value, args.image_digest)
+        elif args.action == "verify-subnets":
+            if args.value is None or args.image_digest is not None:
+                raise ConfigurationError("verify-subnets requires exactly one AWS response path")
+            require_aws_subnets(environment, _json(Path(args.value), "AWS subnet response"))
         else:
-            raise ConfigurationError("tofu-vars requires bootstrap or runtime IMAGE_DIGEST")
-        print(json.dumps(variables, separators=(",", ":"), sort_keys=True))
+            _tofu_vars_action(environment, args.value, args.image_digest)
         return 0
     except ConfigurationError as exc:
         print(f"error: {exc}", file=sys.stderr)

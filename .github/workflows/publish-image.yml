@@ -77,6 +77,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ steps.source.outputs.image_source_sha }}
+          path: application-source
           persist-credentials: false
 
       - name: Create private dependency token
@@ -118,7 +119,7 @@ jobs:
             DOCKER_BUILDKIT=1 docker build \
               --provenance=false \
               --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
-              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" .
+              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" application-source
             docker run --rm \
               --entrypoint python \
               --env DEV_MODE=true \
@@ -129,11 +130,11 @@ jobs:
               -c "import backend.app.main, numpy, pandas, pyarrow; print('container smoke test passed')"
             docker push "${image_uri}:${IMAGE_SOURCE_SHA}"
           fi
-          digest="$(aws ecr describe-images \
+          aws ecr describe-images \
             --repository-name "${repository}" \
             --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
-            --query 'imageDetails[0].imageDigest' --output text)"
-          test "${digest}" != "None"
+            --output json > /tmp/data-chord-image.json
+          digest="$(python3 infra/scripts/ecr_image.py digest /tmp/data-chord-image.json)"
           scan_error="/tmp/data-chord-image-scan.err"
           for attempt in $(seq 1 12); do
             if aws ecr describe-image-scan-findings \
@@ -158,15 +159,8 @@ jobs:
             --repository-name "${repository}" \
             --image-id "imageDigest=${digest}" \
             --output json > /tmp/data-chord-image-scan.json
-          python3 - <<'PY'
-          import json
-
-          scan = json.load(open("/tmp/data-chord-image-scan.json"))
-          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
-          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
-          if sum(blocked.values()):
-              raise SystemExit(f"ECR scan blocks publication: {blocked}")
-          PY
+          python3 infra/scripts/ecr_image.py scan /tmp/data-chord-image-scan.json \
+            --purpose publication
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
