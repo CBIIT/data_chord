@@ -6,11 +6,14 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   infrastructure:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
@@ -48,12 +51,12 @@ jobs:
         run: bash scripts/check-shell-syntax.sh
 
   js-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Security: keep CI on the same Node line as dependency-install jobs.
           node-version: '24.5.0'
@@ -62,12 +65,12 @@ jobs:
         run: bash scripts/check-js-syntax.sh
 
   test-js:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Security: Node must be new enough to run the pinned npm with package age enforcement.
           node-version: '24.5.0'
@@ -87,21 +90,21 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
           version: "0.13.4"
@@ -124,21 +127,21 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
           version: "0.13.4"
@@ -161,21 +164,21 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
           version: "0.13.4"
@@ -192,7 +195,7 @@ jobs:
           GIT_CONFIG_VALUE_0: "https://github.com/"
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.5.0'
 
@@ -213,21 +216,21 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
           version: "0.13.4"
@@ -257,15 +260,15 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
@@ -295,23 +298,23 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    # Playwright 1.58.1 does not provide Chromium support for Ubuntu 26.04,
-    # which ubuntu-latest began selecting in October 2026.
+    # Pin the runner because Playwright 1.58.1 does not provide Chromium
+    # support for Ubuntu 26.04.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create agentic dependency token
         id: agentic-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: agentic_harmonization
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Security: pin uv so dependency age enforcement stays stable in CI.
           version: "0.13.4"
@@ -328,7 +331,7 @@ jobs:
           GIT_CONFIG_VALUE_0: "https://github.com/"
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Security: Node must be new enough to run the pinned npm with package age enforcement.
           node-version: '24.5.0'
@@ -346,7 +349,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-ubuntu-24.04-${{ steps.playwright-version.outputs.version }}-chromium
