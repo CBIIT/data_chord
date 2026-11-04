@@ -49,13 +49,24 @@ ECR-only session policy, plan adds the AWS-managed `ReadOnlyAccess` session
 policy, and apply receives the deployer role's normal bounded permissions only
 after `dev` approval.
 
-### Bootstrap before the first image
+### Initialize a new application environment
 
-The `Bootstrap DataChord Cloud One resources` workflow plans and optionally
-applies the network-independent resources: ECR, S3, DynamoDB, CloudWatch,
-application IAM roles, and the ECS cluster. It uploads the exact binary plan,
-its human-readable rendering, and its SHA-256 digest. The protected apply job
-downloads and applies that same-run plan.
+Two separate one-time operations prepare DataChord. The
+`datachord-infrastructure` repository bootstraps an AWS account foundation: its
+state bucket, deployer role, and permission boundaries. This application
+repository then uses the `Initialize a new DataChord environment` workflow to
+plan and optionally create the network-independent application resources: ECR,
+S3, DynamoDB, CloudWatch, application IAM roles, and the ECS cluster. The
+workflow uploads the exact binary plan, its human-readable rendering, and its
+SHA-256 digest. The protected apply job downloads and applies that same-run
+plan.
+
+Application initialization is restricted to a new environment. Once runtime
+state contains an ECS service, task definition, runtime security group, or
+load balancer, the workflow stops and directs the operator to the normal
+plan/deploy workflow. This prevents a bootstrap-mode plan from disabling an
+established runtime. Create a separate environment contract and state key when
+initializing a future environment.
 
 The foundation must exist first. Its expected state bucket is
 `cbiit-datachord-state-211125567571-us-east-1`, and the application state key is
@@ -122,7 +133,8 @@ Choose exactly one operation:
 
 `plan` is the default operation. Use it when reviewing an infrastructure
 change without changing AWS. Use `deploy` for a normal application release.
-Do not run the bootstrap workflow during a normal release.
+Do not run the foundation bootstrap or application-initialization workflow
+during a normal release.
 
 Leave **Image source SHA** blank for a normal release. The workflow then uses
 the current full commit on `main` for both the application image and deployment

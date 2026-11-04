@@ -102,6 +102,8 @@ def test_bootstrap_is_network_independent_and_approval_gated() -> None:
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "if: inputs.apply" in workflow
     assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow
+    assert workflow.count("ensure_initialization_safe.py") == 2
+    assert workflow.count("tofu -chdir=infra/cloud-one state list") == 2
     assert "> .plans/dev-bootstrap.txt" in workflow
     assert "> ../../.plans/dev-bootstrap.txt" not in workflow
 
