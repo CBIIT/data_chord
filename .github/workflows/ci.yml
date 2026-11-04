@@ -255,10 +255,10 @@ jobs:
           --ignore-vuln CVE-2026-69247
 
   container:
-    # Build the production image on every trusted change so base-image and
-    # native-wheel compatibility failures are caught before a release run.
+    # Pull requests prove that the production image can build and start. A
+    # successful main run publishes the same commit through publish-image.
     if: >-
-      github.event_name != 'pull_request' ||
+      github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     steps:
@@ -364,3 +364,23 @@ jobs:
 
       - name: Run E2E tests
         run: npm run test:e2e
+
+  publish-image:
+    name: Publish reviewed main image
+    if: ${{ github.event_name == 'push' }}
+    needs:
+      - infrastructure
+      - js-check
+      - test-js
+      - test
+      - type-check
+      - lint
+      - security
+      - e2e
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      image_source_sha: ${{ github.sha }}
+    secrets: inherit

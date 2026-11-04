@@ -1,0 +1,181 @@
+name: Publish or restore DataChord image
+
+run-name: Publish DataChord image ${{ inputs.image_source_sha || github.sha }}
+
+on:
+  workflow_call:
+    inputs:
+      image_source_sha:
+        description: Full reviewed main-history commit SHA; blank uses the caller commit
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+    inputs:
+      image_source_sha:
+        description: Optional full main-history commit SHA to restore (blank uses current main)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-chord-cbiit-dev
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish immutable application image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require the reviewed main branch
+        env:
+          REQUESTED_REF: ${{ github.ref }}
+        run: |
+          test "${REQUESTED_REF}" = "refs/heads/main" || {
+            echo "Images may be published only from main." >&2
+            exit 1
+          }
+
+      - name: Check out current main history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve reviewed application source
+        id: source
+        env:
+          REQUESTED_IMAGE_SOURCE_SHA: ${{ inputs.image_source_sha }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(git rev-parse HEAD)"
+          test "${current_main_sha}" = "${GITHUB_SHA}"
+          image_source_sha="$(python3 infra/scripts/resolve_release_source.py \
+            --repository . \
+            --current "${current_main_sha}" \
+            --requested "${REQUESTED_IMAGE_SOURCE_SHA}")"
+          echo "image_source_sha=${image_source_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Read the committed dev contract
+        id: environment
+        run: |
+          config="environments/cbiit/dev.json"
+          python3 infra/scripts/cloud_one_environment.py validate "${config}" cbiit dev
+          {
+            echo "account_id=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id)"
+            echo "deployer_role_arn=arn:aws:iam::$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev account_id):role/foundation/cbiit-datachord-deployer"
+            echo "region=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev region)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Check out reviewed application source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.source.outputs.image_source_sha }}
+          persist-credentials: false
+
+      - name: Create private dependency token
+        id: agentic-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
+          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: agentic_harmonization
+
+      - name: Authenticate to the dev image registry
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ steps.environment.outputs.deployer_role_arn }}
+          role-session-name: data-chord-dev-publish-${{ github.run_id }}
+          aws-region: ${{ steps.environment.outputs.region }}
+          allowed-account-ids: ${{ steps.environment.outputs.account_id }}
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ steps.environment.outputs.region }}:${{ steps.environment.outputs.account_id }}:repository/data-chord-dev"}]}
+
+      - name: Build, smoke-test, and publish a missing image
+        id: image
+        env:
+          ACCOUNT_ID: ${{ steps.environment.outputs.account_id }}
+          AWS_REGION: ${{ steps.environment.outputs.region }}
+          IMAGE_SOURCE_SHA: ${{ steps.source.outputs.image_source_sha }}
+          PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          repository="data-chord-dev"
+          registry="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          image_uri="${registry}/${repository}"
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${registry}"
+          if ! aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" >/dev/null 2>&1; then
+            DOCKER_BUILDKIT=1 docker build \
+              --provenance=false \
+              --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
+              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" .
+            docker run --rm \
+              --entrypoint python \
+              --env DEV_MODE=true \
+              --env DATA_CHORD_REFERENCE_TABLE=reference \
+              --env DATA_CHORD_HARMONIZATION_CACHE_TABLE=harmonization-cache \
+              --env DATA_CHORD_CDE_RECOMMENDATION_CACHE_TABLE=cde-recommendation-cache \
+              "${image_uri}:${IMAGE_SOURCE_SHA}" \
+              -c "import backend.app.main, numpy, pandas, pyarrow; print('container smoke test passed')"
+            docker push "${image_uri}:${IMAGE_SOURCE_SHA}"
+          fi
+          digest="$(aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+          test "${digest}" != "None"
+          scan_error="/tmp/data-chord-image-scan.err"
+          for attempt in $(seq 1 12); do
+            if aws ecr describe-image-scan-findings \
+              --repository-name "${repository}" \
+              --image-id "imageDigest=${digest}" >/dev/null 2>"${scan_error}"; then
+              break
+            fi
+            grep -q "ScanNotFoundException" "${scan_error}" || {
+              cat "${scan_error}" >&2
+              exit 1
+            }
+            if [ "${attempt}" -eq 12 ]; then
+              echo "ECR did not expose the scan within 60 seconds." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          aws ecr wait image-scan-complete \
+            --repository-name "${repository}" \
+            --image-id "imageDigest=${digest}"
+          aws ecr describe-image-scan-findings \
+            --repository-name "${repository}" \
+            --image-id "imageDigest=${digest}" \
+            --output json > /tmp/data-chord-image-scan.json
+          python3 - <<'PY'
+          import json
+
+          scan = json.load(open("/tmp/data-chord-image-scan.json"))
+          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
+          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
+          if sum(blocked.values()):
+              raise SystemExit(f"ECR scan blocks publication: {blocked}")
+          PY
+          echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write image publication summary
+        run: |
+          {
+            echo "## Published DataChord dev image"
+            echo
+            echo "- **Application source:** \`${{ steps.source.outputs.image_source_sha }}\`"
+            echo "- **Image:** \`${{ steps.image.outputs.image_uri }}\`"
+            echo "- **AWS target:** \`${{ steps.environment.outputs.account_id }}\` / \`${{ steps.environment.outputs.region }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
