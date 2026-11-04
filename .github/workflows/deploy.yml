@@ -1,22 +1,24 @@
 name: Build and deploy DataChord to Cloud One
 
-run-name: >-
-  ${{ inputs.publish_only && 'Publish image' || inputs.apply && 'Build and deploy' || 'Build and plan' }} DataChord
-  (cbiit/dev)
+run-name: DataChord ${{ inputs.operation }} (cbiit/dev)
 
 on:
   workflow_dispatch:
     inputs:
-      publish_only:
-        description: Build, scan, and publish the image without planning the ECS runtime
+      operation:
+        description: Publish an image, create a read-only plan, or deploy through dev approval
         required: true
-        default: false
-        type: boolean
-      apply:
-        description: Wait for dev approval and apply this run's reviewed ECS plan
-        required: true
-        default: false
-        type: boolean
+        default: plan
+        type: choice
+        options:
+          - publish
+          - plan
+          - deploy
+      image_source_sha:
+        description: Optional full main-history commit SHA to deploy or roll back to (blank uses current main)
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -36,24 +38,39 @@ jobs:
       region: ${{ steps.environment.outputs.region }}
       state_bucket: ${{ steps.environment.outputs.state_bucket }}
       state_key: ${{ steps.environment.outputs.state_key }}
+      image_source_sha: ${{ steps.source.outputs.image_source_sha }}
+      infrastructure_source_sha: ${{ steps.source.outputs.infrastructure_source_sha }}
     steps:
       - name: Require main for every privileged run
         env:
-          APPLY: ${{ inputs.apply }}
-          PUBLISH_ONLY: ${{ inputs.publish_only }}
           REQUESTED_REF: ${{ github.ref }}
         run: |
           test "${REQUESTED_REF}" = "refs/heads/main" || {
             echo "Cloud One releases must run from main." >&2
             exit 1
           }
-          test "${APPLY}:${PUBLISH_ONLY}" != "true:true" || {
-            echo "publish_only and apply cannot both be enabled." >&2
-            exit 1
-          }
 
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve reviewed application source
+        id: source
+        env:
+          REQUESTED_IMAGE_SOURCE_SHA: ${{ inputs.image_source_sha }}
+        run: |
+          set -euo pipefail
+          infrastructure_source_sha="$(git rev-parse HEAD)"
+          test "${infrastructure_source_sha}" = "${GITHUB_SHA}"
+          image_source_sha="$(python3 infra/scripts/resolve_release_source.py \
+            --repository . \
+            --current "${infrastructure_source_sha}" \
+            --requested "${REQUESTED_IMAGE_SOURCE_SHA}")"
+          {
+            echo "image_source_sha=${image_source_sha}"
+            echo "infrastructure_source_sha=${infrastructure_source_sha}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Read the committed environment contract
         id: environment
@@ -80,8 +97,11 @@ jobs:
       image_digest: ${{ steps.image.outputs.image_digest }}
       image_uri: ${{ steps.image.outputs.image_uri }}
     steps:
-      - name: Check out reviewed source
+      - name: Check out reviewed application source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.image_source_sha }}
+          persist-credentials: false
 
       - name: Create private dependency token
         id: agentic-token
@@ -107,6 +127,7 @@ jobs:
         env:
           ACCOUNT_ID: ${{ needs.preflight.outputs.account_id }}
           AWS_REGION: ${{ needs.preflight.outputs.region }}
+          IMAGE_SOURCE_SHA: ${{ needs.preflight.outputs.image_source_sha }}
           PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
         run: |
           set -euo pipefail
@@ -116,16 +137,16 @@ jobs:
             | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           if ! aws ecr describe-images \
             --repository-name "${repository}" \
-            --image-ids "imageTag=${GITHUB_SHA}" >/dev/null 2>&1; then
+            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" >/dev/null 2>&1; then
             DOCKER_BUILDKIT=1 docker build \
               --provenance=false \
               --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
-              --tag "${image_uri}:${GITHUB_SHA}" .
-            docker push "${image_uri}:${GITHUB_SHA}"
+              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" .
+            docker push "${image_uri}:${IMAGE_SOURCE_SHA}"
           fi
           digest="$(aws ecr describe-images \
             --repository-name "${repository}" \
-            --image-ids "imageTag=${GITHUB_SHA}" \
+            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
             --query 'imageDetails[0].imageDigest' --output text)"
           test "${digest}" != "None"
           scan_error="/tmp/data-chord-image-scan.err"
@@ -169,14 +190,16 @@ jobs:
           {
             echo "## DataChord dev image"
             echo
-            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
+            echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
             echo "- **Image:** \`${{ steps.image.outputs.image_uri }}\`"
-            echo "- **Publish only:** ${{ inputs.publish_only }}"
+            echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
+            echo "- **Operation:** ${{ inputs.operation }}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
   plan:
     name: Plan cbiit/dev runtime
-    if: ${{ !inputs.publish_only }}
+    if: ${{ inputs.operation != 'publish' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -280,15 +303,17 @@ jobs:
           {
             echo "## DataChord dev release plan"
             echo
-            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
+            echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
             echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
+            echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
             echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
-            echo "- **Apply requested:** ${{ inputs.apply }}"
+            echo "- **Operation:** ${{ inputs.operation }}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
   apply:
     name: Apply reviewed cbiit/dev runtime plan
-    if: ${{ inputs.apply && !inputs.publish_only }}
+    if: ${{ inputs.operation == 'deploy' }}
     needs: [preflight, build, plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -386,9 +411,13 @@ jobs:
           {
             echo "## DataChord dev deployment"
             echo
-            echo "- **Source:** \`${GITHUB_SHA}\`"
+            echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
+            echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
             echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
+            echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
+            echo "- **ECS service:** \`data-chord-dev/data-chord-dev\`"
             echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
+            echo "- **Verification result:** ${{ job.status }}"
             if [ -n "${preview_url}" ]; then
               echo "- **Internal dev preview:** ${preview_url}"
             fi

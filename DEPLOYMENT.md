@@ -18,13 +18,14 @@ stage; their application resource names overlap.
 ## Cloud One private dev deployment
 
 The initial CBIIT target is `cbiit/dev` in non-production account
-`211125567571`, Region `us-east-1`. It intentionally omits a load balancer,
-Cognito, DNS, certificates, and public ingress. The first service is one
-on-demand Fargate task with 1 vCPU, 4 GiB of memory, the default 20 GiB of
-ephemeral storage, five concurrent agentic workers, and one active job. The
-configured worker ceiling permits up to 100 after quota and load qualification.
-Keep minimum, desired, and maximum task counts at one until request routing and
-the in-memory job lifecycle have been qualified for multiple tasks.
+`211125567571`, Region `us-east-1`. It includes an internal HTTP Application
+Load Balancer for the no-user dev preview, but intentionally omits Cognito,
+DNS, certificates, and public ingress. The first service is one on-demand
+Fargate task with 1 vCPU, 4 GiB of memory, the default 20 GiB of ephemeral
+storage, five concurrent agentic workers, and one active job. The configured
+worker ceiling permits up to 100 after quota and load qualification. Keep
+minimum, desired, and maximum task counts at one until request routing and the
+in-memory job lifecycle have been qualified for multiple tasks.
 
 The current application dependency is pinned to GPT-5.6. The deployed image
 therefore uses GPT-5.6 Luna for exploration, shortlisting, and CDE ranking, and
@@ -99,9 +100,61 @@ The Docker base images are pinned by tag and immutable registry digest. Update
 the tag and digest together in a reviewed dependency change; never update only
 the tag.
 
-The workflow is manual for the first deployment. Enable automatic releases
-from `main` only after bootstrap, VPC completion, model-access verification,
-reference-data loading, and one successful reviewed dev deployment.
+The workflow remains manual while the dev release process is being qualified.
+Revisit automatic releases from `main` only after several repeatable reviewed
+deployments and rollback rehearsal; automation must still preserve image
+scanning, exact-plan application, environment controls, and smoke testing.
+
+### Operate a dev release
+
+Normal releases use one manually dispatched workflow and one deployment
+environment. In GitHub, open **Actions**, choose **Build and deploy DataChord
+to Cloud One**, select **Run workflow**, and leave the branch set to `main`.
+Choose exactly one operation:
+
+- `publish` builds or reuses the immutable commit image, scans it, and stops
+  after publishing it to ECR;
+- `plan` performs `publish`, creates the read-only runtime plan, and uploads
+  the exact binary plan, readable rendering, variables, and lock file; or
+- `deploy` performs `publish` and `plan`, waits for approval in the `dev`
+  GitHub Environment, applies that same saved plan, waits for ECS and the
+  internal ALB, and runs the data-plane and model smoke task.
+
+`plan` is the default operation. Use it when reviewing an infrastructure
+change without changing AWS. Use `deploy` for a normal application release.
+Do not run the bootstrap workflow during a normal release.
+
+Leave **Image source SHA** blank for a normal release. The workflow then uses
+the current full commit on `main` for both the application image and deployment
+configuration. The release summary records the application source, deployment
+source, immutable image digest, saved-plan digest, and internal preview URL.
+
+### Roll back dev
+
+Rollback uses the normal `deploy` operation. Copy the full 40-character commit
+SHA from a previously successful deployment and enter it as **Image source
+SHA**. The workflow accepts only a commit that is reachable from current
+`main`; pull-request branches and arbitrary commits are rejected. It builds or
+reuses the historical application image but creates and applies the plan with
+the current infrastructure code from `main`. The normal vulnerability scan,
+`dev` approval, exact-plan verification, ECS/ALB stabilization, and smoke task
+still run.
+
+After diagnosing the regression, deploy the current `main` commit again by
+running `deploy` with **Image source SHA** blank. The ECS deployment circuit
+breaker handles a task that cannot stabilize, but it does not replace this
+operator rollback for a healthy deployment with incorrect application
+behavior.
+
+### Inspect a failed release
+
+Start with the failed GitHub job and its step summary. For image failures,
+inspect the ECR scan findings for `data-chord-dev`. For startup or health
+failures, inspect `/ecs/data-chord-dev` in CloudWatch Logs, the
+`data-chord-dev` ECS service events, and target health for the internal ALB.
+For smoke failures, inspect the stopped one-off ECS task and its `app` log
+stream. Retry with a new workflow run; never apply a downloaded plan manually
+or reuse an artifact from a different run.
 
 Before release, load an approved reference-data export and verify the private
 subnets have the approved outbound path to ECR, S3, DynamoDB, CloudWatch Logs,

@@ -19,10 +19,14 @@ def test_release_uses_jobs_for_build_and_plan_and_one_dev_environment() -> None:
     assert "deployer_role_arn" in workflow
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
-    assert "publish_only:" in workflow
-    assert 'test "${APPLY}:${PUBLISH_ONLY}" != "true:true"' in workflow
-    assert "if: ${{ !inputs.publish_only }}" in workflow
-    assert "if: ${{ inputs.apply && !inputs.publish_only }}" in workflow
+    assert "operation:" in workflow
+    assert "- publish\n" in workflow
+    assert "- plan\n" in workflow
+    assert "- deploy\n" in workflow
+    assert "publish_only:" not in workflow
+    assert "inputs.apply" not in workflow
+    assert "if: ${{ inputs.operation != 'publish' }}" in workflow
+    assert "if: ${{ inputs.operation == 'deploy' }}" in workflow
 
 
 def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
@@ -32,7 +36,7 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert "repositories: agentic_harmonization" in workflow
     assert "--provenance=false" in workflow
     assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
-    assert "imageTag=${GITHUB_SHA}" in workflow
+    assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
     assert "image_digest" in workflow
     assert "image-scan-complete" in workflow
     assert "DescribeImageScanFindings" in workflow
@@ -50,6 +54,21 @@ def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
     assert "Verify VPC and subnet ownership" in workflow
     assert "AvailabilityZone" in workflow
     assert "MapPublicIpOnLaunch" in workflow
+
+
+def test_release_rollbacks_use_reviewed_application_history_and_current_infrastructure() -> None:
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "image_source_sha:" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "resolve_release_source.py" in workflow
+    assert "ref: ${{ needs.preflight.outputs.image_source_sha }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert workflow.count("ref: ${{ needs.preflight.outputs.image_source_sha }}") == 1
+    assert "IMAGE_SOURCE_SHA: ${{ needs.preflight.outputs.image_source_sha }}" in workflow
+    assert 'test "${infrastructure_source_sha}" = "${GITHUB_SHA}"' in workflow
+    assert "Application source:" in workflow
+    assert "Deployment source:" in workflow
 
 
 def test_release_applies_only_the_same_run_reviewed_plan() -> None:
