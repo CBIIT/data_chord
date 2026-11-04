@@ -10,7 +10,7 @@ PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-image.yml"
 DOCKERFILE = ROOT / "Dockerfile"
 
 
-def test_release_uses_jobs_for_build_and_plan_and_one_dev_environment() -> None:
+def test_release_uses_read_only_plan_and_one_dev_environment() -> None:
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
@@ -21,36 +21,32 @@ def test_release_uses_jobs_for_build_and_plan_and_one_dev_environment() -> None:
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
     assert "operation:" in workflow
-    assert "- publish\n" in workflow
     assert "- plan\n" in workflow
     assert "- deploy\n" in workflow
+    assert workflow.count("- plan\n") == 1
+    assert workflow.count("- deploy\n") == 1
     assert "publish_only:" not in workflow
     assert "inputs.apply" not in workflow
-    assert "if: ${{ inputs.operation != 'publish' }}" in workflow
     assert "if: ${{ inputs.operation == 'deploy' }}" in workflow
+    assert "\n  build:\n" not in workflow
 
 
-def test_release_builds_the_private_dependency_and_deploys_by_digest() -> None:
+def test_release_resolves_a_published_scanned_image_and_deploys_by_digest() -> None:
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "actions/create-github-app-token@" in workflow
-    assert "repositories: agentic_harmonization" in workflow
-    assert "--provenance=false" in workflow
-    assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
+    assert "actions/create-github-app-token@" not in workflow
+    assert "docker build" not in workflow
+    assert "docker push" not in workflow
+    assert "ecr:GetAuthorizationToken" not in workflow
     assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
     assert "image_digest" in workflow
-    assert "image-scan-complete" in workflow
-    assert "DescribeImageScanFindings" in workflow
-    assert "ScanNotFoundException" in workflow
-    assert "for attempt in $(seq 1 12)" in workflow
-    assert "ECR did not expose the scan within 60 seconds." in workflow
+    assert "describe-image-scan-findings" in workflow
+    assert 'status != "COMPLETE"' in workflow
     assert '("CRITICAL", "HIGH")' in workflow
     assert "cloud_one_environment.py validate" in workflow
     assert "runtime" in workflow
     assert "cbiit dev network" not in workflow
-    assert workflow.index("\n  build:\n") < workflow.index("\n  plan:\n")
     assert workflow.index("\n  plan:\n") < workflow.index("Require the completed VPC contract")
-    assert "Write image publication summary" in workflow
     assert "steps.image.outputs.image_uri" in workflow
     assert "Verify VPC and subnet ownership" in workflow
     assert "AvailabilityZone" in workflow
@@ -63,9 +59,7 @@ def test_release_rollbacks_use_reviewed_application_history_and_current_infrastr
     assert "image_source_sha:" in workflow
     assert "fetch-depth: 0" in workflow
     assert "resolve_release_source.py" in workflow
-    assert "ref: ${{ needs.preflight.outputs.image_source_sha }}" in workflow
-    assert "persist-credentials: false" in workflow
-    assert workflow.count("ref: ${{ needs.preflight.outputs.image_source_sha }}") == 1
+    assert "ref: ${{ needs.preflight.outputs.image_source_sha }}" not in workflow
     assert "IMAGE_SOURCE_SHA: ${{ needs.preflight.outputs.image_source_sha }}" in workflow
     assert 'test "${infrastructure_source_sha}" = "${GITHUB_SHA}"' in workflow
     assert "Application source:" in workflow

@@ -1,4 +1,4 @@
-name: Build and deploy DataChord to Cloud One
+name: Plan and deploy DataChord to Cloud One
 
 run-name: DataChord ${{ inputs.operation }} (cbiit/dev)
 
@@ -6,12 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Publish an image, create a read-only plan, or deploy through dev approval
+        description: Create a read-only plan or deploy that exact plan through dev approval
         required: true
         default: plan
         type: choice
         options:
-          - publish
           - plan
           - deploy
       image_source_sha:
@@ -85,122 +84,9 @@ jobs:
             echo "state_key=$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev state_key)"
           } >> "${GITHUB_OUTPUT}"
 
-  build:
-    name: Publish immutable application image
-    needs: preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      id-token: write
-    outputs:
-      image_digest: ${{ steps.image.outputs.image_digest }}
-      image_uri: ${{ steps.image.outputs.image_uri }}
-    steps:
-      - name: Check out reviewed application source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.image_source_sha }}
-          persist-credentials: false
-
-      - name: Create private dependency token
-        id: agentic-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
-          private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: agentic_harmonization
-
-      - name: Authenticate to the dev image registry
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ needs.preflight.outputs.deployer_role_arn }}
-          role-session-name: data-chord-dev-build-${{ github.run_id }}
-          aws-region: ${{ needs.preflight.outputs.region }}
-          allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
-          inline-session-policy: >-
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ needs.preflight.outputs.region }}:${{ needs.preflight.outputs.account_id }}:repository/data-chord-dev"}]}
-
-      - name: Build or reuse the commit image
-        id: image
-        env:
-          ACCOUNT_ID: ${{ needs.preflight.outputs.account_id }}
-          AWS_REGION: ${{ needs.preflight.outputs.region }}
-          IMAGE_SOURCE_SHA: ${{ needs.preflight.outputs.image_source_sha }}
-          PRIVATE_DEPENDENCY_TOKEN: ${{ steps.agentic-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          repository="data-chord-dev"
-          image_uri="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${repository}"
-          aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          if ! aws ecr describe-images \
-            --repository-name "${repository}" \
-            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" >/dev/null 2>&1; then
-            DOCKER_BUILDKIT=1 docker build \
-              --provenance=false \
-              --secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN \
-              --tag "${image_uri}:${IMAGE_SOURCE_SHA}" .
-            docker push "${image_uri}:${IMAGE_SOURCE_SHA}"
-          fi
-          digest="$(aws ecr describe-images \
-            --repository-name "${repository}" \
-            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
-            --query 'imageDetails[0].imageDigest' --output text)"
-          test "${digest}" != "None"
-          scan_error="/tmp/data-chord-image-scan.err"
-          for attempt in $(seq 1 12); do
-            if aws ecr describe-image-scan-findings \
-              --repository-name "${repository}" \
-              --image-id "imageDigest=${digest}" >/dev/null 2>"${scan_error}"; then
-              break
-            fi
-            grep -q "ScanNotFoundException" "${scan_error}" || {
-              cat "${scan_error}" >&2
-              exit 1
-            }
-            if [ "${attempt}" -eq 12 ]; then
-              echo "ECR did not expose the scan within 60 seconds." >&2
-              exit 1
-            fi
-            sleep 5
-          done
-          aws ecr wait image-scan-complete \
-            --repository-name "${repository}" \
-            --image-id "imageDigest=${digest}"
-          aws ecr describe-image-scan-findings \
-            --repository-name "${repository}" \
-            --image-id "imageDigest=${digest}" \
-            --output json > /tmp/data-chord-image-scan.json
-          python3 - <<'PY'
-          import json
-
-          scan = json.load(open("/tmp/data-chord-image-scan.json"))
-          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
-          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
-          if sum(blocked.values()):
-              raise SystemExit(f"ECR scan blocks deployment: {blocked}")
-          PY
-          echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
-          echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
-
-      - name: Write image publication summary
-        run: |
-          {
-            echo "## DataChord dev image"
-            echo
-            echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
-            echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
-            echo "- **Image:** \`${{ steps.image.outputs.image_uri }}\`"
-            echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
-            echo "- **Operation:** ${{ inputs.operation }}"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
   plan:
     name: Plan cbiit/dev runtime
-    if: ${{ inputs.operation != 'publish' }}
-    needs: [preflight, build]
+    needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -208,6 +94,8 @@ jobs:
       id-token: write
     outputs:
       artifact_id: ${{ steps.upload-plan.outputs.artifact-id }}
+      image_digest: ${{ steps.image.outputs.image_digest }}
+      image_uri: ${{ steps.image.outputs.image_uri }}
       plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
     steps:
       - name: Check out reviewed source
@@ -218,12 +106,6 @@ jobs:
         with:
           tofu_version: 1.10.3
 
-      - name: Require the completed VPC contract
-        run: |
-          python3 infra/scripts/cloud_one_environment.py validate \
-            environments/cbiit/dev.json cbiit dev runtime \
-            "${{ needs.build.outputs.image_digest }}"
-
       - name: Authenticate with read-only AWS permissions
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -232,6 +114,60 @@ jobs:
           aws-region: ${{ needs.preflight.outputs.region }}
           allowed-account-ids: ${{ needs.preflight.outputs.account_id }}
           managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess
+
+      - name: Resolve the published and scanned application image
+        id: image
+        env:
+          ACCOUNT_ID: ${{ needs.preflight.outputs.account_id }}
+          AWS_REGION: ${{ needs.preflight.outputs.region }}
+          IMAGE_SOURCE_SHA: ${{ needs.preflight.outputs.image_source_sha }}
+        run: |
+          set -euo pipefail
+          repository="data-chord-dev"
+          image_uri="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${repository}"
+          if ! aws ecr describe-images \
+            --repository-name "${repository}" \
+            --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
+            --output json > /tmp/data-chord-image.json; then
+            echo "::error::No published image exists for ${IMAGE_SOURCE_SHA}. Run the Publish or restore DataChord image workflow first."
+            exit 1
+          fi
+          digest="$(python3 - <<'PY'
+          import json
+
+          details = json.load(open("/tmp/data-chord-image.json"))["imageDetails"]
+          if len(details) != 1 or not details[0].get("imageDigest"):
+              raise SystemExit("ECR did not return exactly one immutable image digest")
+          print(details[0]["imageDigest"])
+          PY
+          )"
+          if ! aws ecr describe-image-scan-findings \
+            --repository-name "${repository}" \
+            --image-id "imageDigest=${digest}" \
+            --output json > /tmp/data-chord-image-scan.json; then
+            echo "::error::The published image has no completed ECR scan. Run the Publish or restore DataChord image workflow first."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+
+          scan = json.load(open("/tmp/data-chord-image-scan.json"))
+          status = scan.get("imageScanStatus", {}).get("status")
+          if status != "COMPLETE":
+              raise SystemExit(f"ECR scan is not complete: {status or 'UNKNOWN'}")
+          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
+          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
+          if sum(blocked.values()):
+              raise SystemExit(f"ECR scan blocks deployment: {blocked}")
+          PY
+          echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Require the completed VPC contract
+        run: |
+          python3 infra/scripts/cloud_one_environment.py validate \
+            environments/cbiit/dev.json cbiit dev runtime \
+            "${{ steps.image.outputs.image_digest }}"
 
       - name: Verify VPC and subnet ownership
         run: |
@@ -270,7 +206,7 @@ jobs:
           mkdir -p .plans
           python3 infra/scripts/cloud_one_environment.py tofu-vars \
             environments/cbiit/dev.json cbiit dev runtime \
-            "${{ needs.build.outputs.image_digest }}" > .plans/dev.auto.tfvars.json
+            "${{ steps.image.outputs.image_digest }}" > .plans/dev.auto.tfvars.json
           tofu -chdir=infra/cloud-one init -input=false \
             -backend-config="bucket=${{ needs.preflight.outputs.state_bucket }}" \
             -backend-config="key=${{ needs.preflight.outputs.state_key }}" \
@@ -305,7 +241,7 @@ jobs:
             echo
             echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
             echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
-            echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
+            echo "- **Image:** \`${{ steps.image.outputs.image_uri }}\`"
             echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
             echo "- **Plan SHA-256:** \`${{ steps.plan.outputs.plan_sha256 }}\`"
             echo "- **Operation:** ${{ inputs.operation }}"
@@ -314,7 +250,7 @@ jobs:
   apply:
     name: Apply reviewed cbiit/dev runtime plan
     if: ${{ inputs.operation == 'deploy' }}
-    needs: [preflight, build, plan]
+    needs: [preflight, plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: dev
@@ -413,7 +349,7 @@ jobs:
             echo
             echo "- **Application source:** \`${{ needs.preflight.outputs.image_source_sha }}\`"
             echo "- **Deployment source:** \`${{ needs.preflight.outputs.infrastructure_source_sha }}\`"
-            echo "- **Image:** \`${{ needs.build.outputs.image_uri }}\`"
+            echo "- **Image:** \`${{ needs.plan.outputs.image_uri }}\`"
             echo "- **AWS target:** \`${{ needs.preflight.outputs.account_id }}\` / \`${{ needs.preflight.outputs.region }}\`"
             echo "- **ECS service:** \`data-chord-dev/data-chord-dev\`"
             echo "- **Reviewed plan SHA-256:** \`${{ needs.plan.outputs.plan_sha256 }}\`"
