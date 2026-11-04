@@ -40,14 +40,14 @@ configure its required reviewers. GitHub Environments represent deployment
 targets, so future peers are `qa`, `staging`, and `prod`; build and plan remain
 workflow jobs rather than additional environments.
 
-The repository-level GitHub App variable and private-key secret continue to
-authorize the private dependency checkout. No AWS role secret is required: the
-workflows derive the stable deployer role ARN from the committed account
-contract. The role trusts only the exact `main` branch OIDC subject for build
-and plan and the exact `dev` environment subject for apply. Build adds an
-ECR-only session policy, plan adds the AWS-managed `ReadOnlyAccess` session
-policy, and apply receives the deployer role's normal bounded permissions only
-after `dev` approval.
+The repository-level GitHub App variable and private-key secret authorize the
+private dependency checkout during image publication. No AWS role secret is
+required: the workflows derive the stable deployer role ARN from the committed
+account contract. The role trusts only the exact `main` branch OIDC subject for
+publication and plan and the exact `dev` environment subject for apply.
+Publication adds an ECR-only session policy, plan adds the AWS-managed
+`ReadOnlyAccess` session policy, and apply receives the deployer role's normal
+bounded permissions only after `dev` approval.
 
 ### Initialize a new application environment
 
@@ -83,27 +83,36 @@ The application root does not create or alter that network path. The first
 deployment smoke test must still prove that a Fargate task can reach ECR, S3,
 DynamoDB, CloudWatch Logs, STS, and Bedrock over the approved path.
 
-The initial security group has no inbound rule. Optional internal CIDR ranges
-can be committed later, but no caller should reach the application until a
-trusted proxy or other approved identity boundary supplies exactly one
-`X-Data-Chord-User-ID` header. `/healthz` remains usable for container health
-without identity.
+The internal ALB security group accepts HTTP from `0.0.0.0/0`; this is broad
+inside the connected private network but does not make the ALB public because
+the load balancer uses the `internal` scheme and private subnets. The task
+security group accepts application traffic only from that ALB security group.
+This preview uses a temporary shared dev identity; it is not the production
+authentication design. `/healthz` remains usable for container health without
+identity.
 
 ### Build and release
 
-The `Build and deploy DataChord to Cloud One` workflow:
+After all repository CI jobs pass on `main`, CI calls the `Publish or restore
+DataChord image` workflow. Publication:
 
 1. uses the existing GitHub App credential to read the private
    `CBIIT/agentic_harmonization` dependency during a BuildKit secret mount;
-2. builds or reuses the full Git commit tag in `data-chord-dev` ECR;
+2. builds and smoke-tests the full Git commit tag when it is not already in
+   `data-chord-dev` ECR;
 3. waits for the ECR image scan and rejects any critical or high findings;
-4. resolves that image to its immutable SHA-256 digest;
-5. creates and uploads an exact OpenTofu runtime plan without a deployment
+4. records that image by its immutable SHA-256 digest.
+
+The manual `Plan and deploy DataChord to Cloud One` workflow then:
+
+1. resolves the already-published full-commit image and re-checks its completed
+   scan using AWS read-only permissions;
+2. creates and uploads an exact OpenTofu runtime plan without a deployment
    environment approval;
-6. waits for approval in `dev` when apply was requested;
-7. applies the same reviewed plan and waits for the private ECS service to
+3. waits for approval in `dev` when apply was requested;
+4. applies the same reviewed plan and waits for the private ECS service to
    stabilize; and
-8. runs a one-off task using the deployed task role and private network to
+5. runs a one-off task using the deployed task role and private network to
    round-trip an S3 object, verify all three DynamoDB tables and the populated
    reference catalog, and call GPT-5.6 Luna and Sol through Bedrock Mantle.
 
@@ -111,24 +120,24 @@ The Docker base images are pinned by tag and immutable registry digest. Update
 the tag and digest together in a reviewed dependency change; never update only
 the tag.
 
-The workflow remains manual while the dev release process is being qualified.
-Revisit automatic releases from `main` only after several repeatable reviewed
-deployments and rollback rehearsal; automation must still preserve image
-scanning, exact-plan application, environment controls, and smoke testing.
+Image publication is automatic after successful `main` CI; plan and deploy
+remain manual while the dev release process is being qualified. Revisit
+automatic deployment only after several repeatable reviewed deployments and
+rollback rehearsal; automation must still preserve image scanning, exact-plan
+application, environment controls, and smoke testing.
 
 ### Operate a dev release
 
 Normal releases use one manually dispatched workflow and one deployment
-environment. In GitHub, open **Actions**, choose **Build and deploy DataChord
-to Cloud One**, select **Run workflow**, and leave the branch set to `main`.
+environment. In GitHub, open **Actions**, choose **Plan and deploy DataChord to
+Cloud One**, select **Run workflow**, and leave the branch set to `main`.
 Choose exactly one operation:
 
-- `publish` builds or reuses the immutable commit image, scans it, and stops
-  after publishing it to ECR;
-- `plan` performs `publish`, creates the read-only runtime plan, and uploads
-  the exact binary plan, readable rendering, variables, and lock file; or
-- `deploy` performs `publish` and `plan`, waits for approval in the `dev`
-  GitHub Environment, applies that same saved plan, waits for ECS and the
+- `plan` resolves the image already published by successful `main` CI, creates
+  the read-only runtime plan, and uploads the exact binary plan, readable
+  rendering, variables, and lock file; or
+- `deploy` performs the same read-only plan, waits for approval in the `dev`
+  GitHub Environment, applies that exact saved plan, waits for ECS and the
   internal ALB, and runs the data-plane and model smoke task.
 
 `plan` is the default operation. Use it when reviewing an infrastructure
@@ -146,11 +155,13 @@ source, immutable image digest, saved-plan digest, and internal preview URL.
 Rollback uses the normal `deploy` operation. Copy the full 40-character commit
 SHA from a previously successful deployment and enter it as **Image source
 SHA**. The workflow accepts only a commit that is reachable from current
-`main`; pull-request branches and arbitrary commits are rejected. It builds or
-reuses the historical application image but creates and applies the plan with
-the current infrastructure code from `main`. The normal vulnerability scan,
+`main`; pull-request branches and arbitrary commits are rejected. It resolves
+the historical application image but creates and applies the plan with the
+current infrastructure code from `main`. The completed vulnerability scan,
 `dev` approval, exact-plan verification, ECS/ALB stabilization, and smoke task
-still run.
+still apply. If the historical image has aged out of ECR, first manually run
+**Publish or restore DataChord image** from `main` with that SHA, then run the
+normal `deploy` operation.
 
 After diagnosing the regression, deploy the current `main` commit again by
 running `deploy` with **Image source SHA** blank. The ECS deployment circuit
