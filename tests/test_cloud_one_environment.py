@@ -4,6 +4,10 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from infra.scripts.cloud_one_environment import ConfigurationError, load, require_aws_subnets
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "infra" / "scripts" / "cloud_one_environment.py"
 
@@ -110,3 +114,74 @@ def test_environment_contract_rejects_unknown_fields(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "unsupported fields: role_arn" in result.stderr
+
+
+def test_aws_subnet_contract_requires_exact_private_multi_az_membership(tmp_path: Path) -> None:
+    document = _document()
+    document["vpc_id"] = "vpc-0123456789abcdef0"
+    document["private_subnet_ids"] = [
+        "subnet-0123456789abcdef0",
+        "subnet-0fedcba9876543210",
+    ]
+    environment = load(_environment(tmp_path, document), "cbiit", "dev")
+    response = {
+        "Subnets": [
+            {
+                "SubnetId": document["private_subnet_ids"][0],
+                "VpcId": document["vpc_id"],
+                "State": "available",
+                "MapPublicIpOnLaunch": False,
+                "AvailabilityZone": "us-east-1a",
+            },
+            {
+                "SubnetId": document["private_subnet_ids"][1],
+                "VpcId": document["vpc_id"],
+                "State": "available",
+                "MapPublicIpOnLaunch": False,
+                "AvailabilityZone": "us-east-1b",
+            },
+        ]
+    }
+
+    require_aws_subnets(environment, response)
+
+    response["Subnets"][1]["MapPublicIpOnLaunch"] = True
+    with pytest.raises(ConfigurationError, match="requires private subnets"):
+        require_aws_subnets(environment, response)
+
+
+def test_verify_subnets_cli_rejects_the_wrong_vpc(tmp_path: Path) -> None:
+    document = _document()
+    document["vpc_id"] = "vpc-0123456789abcdef0"
+    document["private_subnet_ids"] = [
+        "subnet-0123456789abcdef0",
+        "subnet-0fedcba9876543210",
+    ]
+    environment = _environment(tmp_path, document)
+    response = tmp_path / "subnets.json"
+    response.write_text(
+        json.dumps(
+            {
+                "Subnets": [
+                    {
+                        "SubnetId": subnet,
+                        "VpcId": "vpc-0fedcba9876543210",
+                        "State": "available",
+                        "MapPublicIpOnLaunch": False,
+                        "AvailabilityZone": zone,
+                    }
+                    for subnet, zone in zip(
+                        document["private_subnet_ids"],
+                        ("us-east-1a", "us-east-1b"),
+                        strict=True,
+                    )
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run("verify-subnets", environment, "cbiit", "dev", response)
+
+    assert result.returncode == 2
+    assert "must belong to the configured VPC" in result.stderr

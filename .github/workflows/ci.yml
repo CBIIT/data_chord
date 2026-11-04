@@ -257,7 +257,9 @@ jobs:
 
   publish-image:
     name: Publish reviewed main image
-    if: ${{ github.event_name == 'push' && needs.required.result == 'success' }}
+    # `always()` prevents an intentionally skipped sibling (the PR-only
+    # container job) from suppressing this reusable workflow after the gate.
+    if: ${{ always() && github.event_name == 'push' && needs.required.result == 'success' }}
     needs: required
     permissions:
       contents: read

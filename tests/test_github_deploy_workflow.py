@@ -43,16 +43,17 @@ def test_release_resolves_a_published_scanned_image_and_deploys_by_digest() -> N
     assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
     assert "image_digest" in workflow
     assert "describe-image-scan-findings" in workflow
-    assert 'status != "COMPLETE"' in workflow
-    assert '("CRITICAL", "HIGH")' in workflow
+    assert "ecr_image.py digest" in workflow
+    assert "ecr_image.py scan" in workflow
+    assert "--purpose deployment" in workflow
     assert "cloud_one_environment.py validate" in workflow
     assert "runtime" in workflow
     assert "cbiit dev network" not in workflow
     assert workflow.index("\n  plan:\n") < workflow.index("Require the completed VPC contract")
     assert "steps.image.outputs.image_uri" in workflow
     assert "Verify VPC and subnet ownership" in workflow
-    assert "AvailabilityZone" in workflow
-    assert "MapPublicIpOnLaunch" in workflow
+    assert "cloud_one_environment.py verify-subnets" in workflow
+    assert "MapPublicIpOnLaunch" not in workflow
 
 
 def test_release_rollbacks_use_reviewed_application_history_and_current_infrastructure() -> None:
@@ -143,7 +144,10 @@ def test_ci_builds_and_smoke_tests_the_production_container() -> None:
     assert "import backend.app.main, numpy, pandas, pyarrow" in workflow
     assert "github.event_name == 'pull_request'" in workflow
     assert "uses: ./.github/workflows/publish-image.yml" in workflow
-    assert "if: ${{ github.event_name == 'push' && needs.required.result == 'success' }}" in workflow
+    assert (
+        "if: ${{ always() && github.event_name == 'push' && "
+        "needs.required.result == 'success' }}" in workflow
+    )
 
 
 def test_ci_consolidates_setup_and_exposes_one_stable_required_gate() -> None:
@@ -181,5 +185,6 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert "docker push" in workflow
     assert workflow.index("docker run --rm") < workflow.index("docker push")
     assert "image-scan-complete" in workflow
-    assert '("CRITICAL", "HIGH")' in workflow
-    assert "ECR scan blocks publication" in workflow
+    assert "ecr_image.py digest" in workflow
+    assert "ecr_image.py scan" in workflow
+    assert "--purpose publication" in workflow

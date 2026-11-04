@@ -132,15 +132,7 @@ jobs:
             echo "::error::No published image exists for ${IMAGE_SOURCE_SHA}. Run the Publish or restore DataChord image workflow first."
             exit 1
           fi
-          digest="$(python3 - <<'PY'
-          import json
-
-          details = json.load(open("/tmp/data-chord-image.json"))["imageDetails"]
-          if len(details) != 1 or not details[0].get("imageDigest"):
-              raise SystemExit("ECR did not return exactly one immutable image digest")
-          print(details[0]["imageDigest"])
-          PY
-          )"
+          digest="$(python3 infra/scripts/ecr_image.py digest /tmp/data-chord-image.json)"
           if ! aws ecr describe-image-scan-findings \
             --repository-name "${repository}" \
             --image-id "imageDigest=${digest}" \
@@ -148,18 +140,8 @@ jobs:
             echo "::error::The published image has no completed ECR scan. Run the Publish or restore DataChord image workflow first."
             exit 1
           fi
-          python3 - <<'PY'
-          import json
-
-          scan = json.load(open("/tmp/data-chord-image-scan.json"))
-          status = scan.get("imageScanStatus", {}).get("status")
-          if status != "COMPLETE":
-              raise SystemExit(f"ECR scan is not complete: {status or 'UNKNOWN'}")
-          counts = scan.get("imageScanFindings", {}).get("findingSeverityCounts", {})
-          blocked = {level: int(counts.get(level, 0)) for level in ("CRITICAL", "HIGH")}
-          if sum(blocked.values()):
-              raise SystemExit(f"ECR scan blocks deployment: {blocked}")
-          PY
+          python3 infra/scripts/ecr_image.py scan /tmp/data-chord-image-scan.json \
+            --purpose deployment
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
@@ -173,31 +155,18 @@ jobs:
         run: |
           set -euo pipefail
           config="environments/cbiit/dev.json"
-          vpc_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vpc_id"])' "${config}")"
+          vpc_id="$(python3 infra/scripts/cloud_one_environment.py get "${config}" cbiit dev vpc_id)"
           readarray -t subnet_ids < <(
-            python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["private_subnet_ids"], sep="\n")' "${config}"
+            python3 infra/scripts/cloud_one_environment.py get \
+              "${config}" cbiit dev private_subnet_ids
           )
           test "$(aws ec2 describe-vpcs \
             --vpc-ids "${vpc_id}" \
             --query 'Vpcs[0].VpcId' --output text)" = "${vpc_id}"
           aws ec2 describe-subnets --subnet-ids "${subnet_ids[@]}" \
             --output json > /tmp/data-chord-subnets.json
-          python3 - "${vpc_id}" "${#subnet_ids[@]}" <<'PY'
-          import json
-          import sys
-
-          vpc_id = sys.argv[1]
-          expected_count = int(sys.argv[2])
-          subnets = json.load(open("/tmp/data-chord-subnets.json"))["Subnets"]
-          if len(subnets) != expected_count:
-              raise SystemExit("AWS did not return every configured subnet")
-          if any(item["VpcId"] != vpc_id or item["State"] != "available" for item in subnets):
-              raise SystemExit("every subnet must be available and belong to the configured VPC")
-          if any(item["MapPublicIpOnLaunch"] for item in subnets):
-              raise SystemExit("the internal dev preview requires private subnets")
-          if len({item["AvailabilityZone"] for item in subnets}) < 2:
-              raise SystemExit("private subnets must span at least two Availability Zones")
-          PY
+          python3 infra/scripts/cloud_one_environment.py verify-subnets \
+            "${config}" cbiit dev /tmp/data-chord-subnets.json
 
       - name: Create exact runtime plan
         id: plan
