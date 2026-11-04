@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 BOOTSTRAP_WORKFLOW = ROOT / ".github" / "workflows" / "bootstrap-cloud-one.yml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-image.yml"
 DOCKERFILE = ROOT / "Dockerfile"
 
 
@@ -144,3 +145,24 @@ def test_ci_builds_and_smoke_tests_the_production_container() -> None:
     assert "--secret id=github_token,env=PRIVATE_DEPENDENCY_TOKEN" in workflow
     assert "--tag data-chord:ci" in workflow
     assert "import backend.app.main, numpy, pandas, pyarrow" in workflow
+    assert "github.event_name == 'pull_request'" in workflow
+    assert "uses: ./.github/workflows/publish-image.yml" in workflow
+    assert "if: ${{ github.event_name == 'push' }}" in workflow
+
+
+def test_main_publication_is_immutable_scanned_and_restorable() -> None:
+    workflow = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_call:" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
+    assert "resolve_release_source.py" in workflow
+    assert "ref: ${{ steps.source.outputs.image_source_sha }}" in workflow
+    assert "repositories: agentic_harmonization" in workflow
+    assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
+    assert "docker run --rm" in workflow
+    assert "docker push" in workflow
+    assert workflow.index("docker run --rm") < workflow.index("docker push")
+    assert "image-scan-complete" in workflow
+    assert '("CRITICAL", "HIGH")' in workflow
+    assert "ECR scan blocks publication" in workflow
