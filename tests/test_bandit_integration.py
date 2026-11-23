@@ -2,7 +2,6 @@
 
 import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
@@ -11,6 +10,7 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 BANDIT_PROJECT = ROOT / "tools" / "bandit" / "pyproject.toml"
 BANDIT_LOCK = ROOT / "tools" / "bandit" / "uv.lock"
 ROOT_PROJECT = ROOT / "pyproject.toml"
+BANDIT_RUNNER = ROOT / "scripts" / "run-bandit.sh"
 
 
 def workflow_job(workflow: str, name: str) -> str:
@@ -39,11 +39,16 @@ def test_ci_requires_secretless_bandit_with_explicit_thresholds() -> None:
     assert "setup-python-project" not in job
     assert "secrets." not in job
     assert "github.event.pull_request.head.repo.full_name" not in job
-    assert "uv sync --project tools/bandit --frozen" in job
-    assert "uv run --project tools/bandit bandit" in job
-    assert "--severity-level medium" in job
-    assert "--confidence-level medium" in job
+    assert "uv sync --project tools/bandit --locked" in job
+    assert "scripts/run-bandit.sh" in job
     assert "--exit-zero" not in job
+
+    runner = BANDIT_RUNNER.read_text(encoding="utf-8")
+    assert "targets=(src/ backend/ scripts/ infra/scripts/)" in runner
+    assert "-c pyproject.toml" in runner
+    assert "--severity-level medium" in runner
+    assert "--confidence-level medium" in runner
+    assert "--exit-zero" not in runner
 
     required = workflow_job(workflow, "required")
     assert "- bandit" in required
@@ -67,16 +72,7 @@ def test_bandit_threshold_rejects_a_credible_shell_injection(tmp_path: Path) -> 
     )
 
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "bandit",
-            "--severity-level",
-            "medium",
-            "--confidence-level",
-            "medium",
-            str(unsafe_source),
-        ],
+        [str(BANDIT_RUNNER), str(unsafe_source)],
         check=False,
         capture_output=True,
         text=True,

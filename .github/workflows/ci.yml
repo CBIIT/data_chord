@@ -99,15 +99,10 @@ jobs:
       - name: Install the locked Bandit tool
         run: |
           uv python install 3.13
-          uv sync --project tools/bandit --frozen
+          uv sync --project tools/bandit --locked
 
-      - name: Scan Python source
-        run: >-
-          uv run --project tools/bandit bandit
-          -r src/
-          -c pyproject.toml
-          --severity-level medium
-          --confidence-level medium
+      - name: Scan first-party Python
+        run: scripts/run-bandit.sh
 
   quality:
     name: Code quality and security
