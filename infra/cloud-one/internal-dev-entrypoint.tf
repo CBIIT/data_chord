@@ -44,7 +44,7 @@ resource "aws_lb" "internal_dev" {
 }
 
 resource "aws_lb_target_group" "internal_dev" {
-  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the planned ALB listener and traffic to private Fargate targets remains inside the approved VPC;ref=CHECKOV_IMPLEMENTATION_PLAN.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the planned ALB listener and traffic to private Fargate targets remains inside the approved VPC;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   count = local.internal_dev_preview_active ? 1 : 0
 
   name        = substr("${local.name_prefix}-preview", 0, 32)

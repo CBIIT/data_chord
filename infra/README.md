@@ -21,8 +21,9 @@ scanner fails, a report is missing, or the explicit root manifest does not
 cover every committed OpenTofu root.
 
 Prefer remediation over suppression. A resource-level `checkov:skip`
-annotation must include `reason`, `ref`, `owner`, and a `review` date in
-`YYYY-MM-DD` form. The CI wrapper rejects undocumented suppressions.
+annotation must include nonempty `reason`, `ref`, `owner`, and a real,
+unexpired `review` date in `YYYY-MM-DD` form. The `ref` must identify a file in
+this repository. The CI wrapper rejects undocumented or expired suppressions.
 
 ## Ownership
 

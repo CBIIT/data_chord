@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 repository_root="$(git rev-parse --show-toplevel)"
 cd "${repository_root}"
@@ -9,54 +9,61 @@ roots_file="${tool_project}/roots.txt"
 artifact_root="${CHECKOV_ARTIFACT_ROOT:-.artifacts/checkov}"
 config_file=".checkov.yml"
 uv_bin="${CHECKOV_UV_BIN:-uv}"
+suppression_validator="scripts/validate_checkov_suppressions.py"
 
 die() {
   echo "::error::$*" >&2
   exit 1
 }
 
-for required in "${tool_project}/pyproject.toml" "${tool_project}/uv.lock" "${roots_file}" "${config_file}"; do
+for required in \
+  "${tool_project}/pyproject.toml" \
+  "${tool_project}/uv.lock" \
+  "${roots_file}" \
+  "${config_file}" \
+  "${suppression_validator}"; do
   test -f "${required}" || die "Required Checkov file is missing: ${required}"
 done
 
 command -v "${uv_bin}" >/dev/null 2>&1 || die "uv is required to run the locked Checkov tool environment."
+command -v rg >/dev/null 2>&1 || die "ripgrep is required to validate Checkov suppressions."
+command -v python3 >/dev/null 2>&1 || die "Python is required to validate Checkov suppressions."
+command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to hash Checkov evidence inputs."
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
 manifest_directories="${tmp_dir}/manifest-directories.txt"
-discovered_directories="${tmp_dir}/discovered-directories.txt"
+tracked_directories="${tmp_dir}/tracked-directories.txt"
 
 awk -F '|' '!/^#/ && NF >= 2 { print $2 }' "${roots_file}" | sort -u > "${manifest_directories}"
-find infra -name .terraform.lock.hcl -not -path '*/.terraform/*' -exec dirname {} \; \
-  | sort -u > "${discovered_directories}"
+git ls-files -- infra \
+  | while IFS= read -r tracked_path; do
+      case "${tracked_path}" in
+        *.tf|*.tftest.hcl) dirname "${tracked_path}" ;;
+      esac
+    done \
+  | sort -u > "${tracked_directories}"
 
-if ! diff -u "${manifest_directories}" "${discovered_directories}"; then
+if ! diff -u "${manifest_directories}" "${tracked_directories}"; then
   die "The Checkov root manifest does not match the committed OpenTofu roots."
 fi
 
-suppression_status=0
-while IFS= read -r suppression; do
-  if [[ "${suppression}" != *"reason="* ]] ||
-     [[ "${suppression}" != *"ref="* ]] ||
-     [[ "${suppression}" != *"owner="* ]] ||
-     [[ ! "${suppression}" =~ review=[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
-    echo "::error::Malformed Checkov suppression: ${suppression}" >&2
-    echo "Expected reason=...;ref=...;owner=...;review=YYYY-MM-DD" >&2
-    suppression_status=1
+suppressions_file="${tmp_dir}/suppressions.txt"
+suppression_summary="${tmp_dir}/suppression-summary.md"
+if rg -n 'checkov:skip=' infra -g '*.tf' > "${suppressions_file}"; then
+  :
+else
+  suppression_search_status=$?
+  if [[ "${suppression_search_status}" -ne 1 ]]; then
+    die "Unable to inventory Checkov suppressions with ripgrep."
   fi
-  if [[ "${suppression}" =~ ref=([^;]+) ]]; then
-    reference="${BASH_REMATCH[1]}"
-    if [[ ! -f "${reference}" ]]; then
-      echo "::error::Checkov suppression references a missing file: ${reference}" >&2
-      suppression_status=1
-    fi
-  fi
-done < <(rg -n 'checkov:skip=' infra -g '*.tf' || true)
-
-if [[ "${suppression_status}" -ne 0 ]]; then
-  exit "${suppression_status}"
 fi
+sort -o "${suppressions_file}" "${suppressions_file}"
+python3 "${suppression_validator}" \
+  --input "${suppressions_file}" \
+  --repository-root "${repository_root}" \
+  > "${suppression_summary}"
 
 rm -rf "${artifact_root}"
 mkdir -p "${artifact_root}"
@@ -64,7 +71,8 @@ mkdir -p "${artifact_root}"
 checkov_version="$("${uv_bin}" run --project "${tool_project}" --frozen checkov --version)" || \
   die "Unable to run the locked Checkov tool."
 printf '%s\n' "${checkov_version}" > "${artifact_root}/version.txt"
-git rev-parse HEAD > "${artifact_root}/source-sha.txt"
+source_sha="$(git rev-parse HEAD)"
+printf '%s\n' "${source_sha}" > "${artifact_root}/source-sha.txt"
 sha256sum "${config_file}" "${roots_file}" "${tool_project}/uv.lock" \
   > "${artifact_root}/configuration-sha256.txt"
 
@@ -73,7 +81,7 @@ summary_file="${artifact_root}/summary.md"
 {
   echo "## Checkov infrastructure scan"
   echo
-  echo "- **Source:** \`$(git rev-parse HEAD)\`"
+  echo "- **Source:** \`${source_sha}\`"
   echo "- **Version:** \`${checkov_version}\`"
   echo
   echo "| Root | Result | Passed | Failed | Skipped |"
@@ -143,8 +151,8 @@ done < "${roots_file}"
   echo
   echo "### Active suppressions"
   echo
-  if rg -n 'checkov:skip=' infra -g '*.tf' > "${tmp_dir}/suppressions.txt"; then
-    sed 's/^/- `/' "${tmp_dir}/suppressions.txt" | sed 's/$/`/'
+  if [[ -s "${suppression_summary}" ]]; then
+    cat "${suppression_summary}"
   else
     echo "None."
   fi

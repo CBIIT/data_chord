@@ -90,7 +90,7 @@ resource "aws_iam_role_policy" "application_build" {
 }
 
 resource "aws_codebuild_project" "app_image" {
-  # checkov:skip=CKV_AWS_316:reason=CodeBuild requires privileged Docker-in-Docker mode to build the canonical application image;ref=CHECKOV_IMPLEMENTATION_PLAN.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_316:reason=CodeBuild requires privileged Docker-in-Docker mode to build the canonical application image;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name          = "${local.name_prefix}-image"
   description   = "Build and push the Data Chord container image"
   service_role  = aws_iam_role.application_build.arn

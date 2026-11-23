@@ -70,7 +70,7 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
-  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the ALB and the target group is isolated to ALB-to-task traffic within the application VPC;ref=CHECKOV_IMPLEMENTATION_PLAN.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the ALB and the target group is isolated to ALB-to-task traffic within the application VPC;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name                 = substr("${local.name_prefix}-app", 0, 32)
   port                 = 8000
   protocol             = "HTTP"

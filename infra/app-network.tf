@@ -1,5 +1,5 @@
 data "aws_availability_zones" "available" {
-  # checkov:skip=CKV_AWS_394:reason=Environment contracts do not yet carry an approved two-zone allowlist;ref=CHECKOV_IMPLEMENTATION_PLAN.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_394:reason=Environment contracts do not yet carry an approved two-zone allowlist;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   state = "available"
 }
 

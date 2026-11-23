@@ -25,6 +25,7 @@ before the listed date.
 | `CKV2_AWS_61`, `CKV_AWS_21` | Workflow S3 bucket | Workflow retention, recovery, and deletion periods remain governance decisions. Enabling lifecycle rules or versioning without those periods would encode an unsupported policy. | Implement the approved lifecycle and recovery policy. |
 | `CKV_AWS_144` | Workflow S3 bucket | Cross-region replication and disaster-recovery requirements remain undefined. | Implement the approved replication and recovery design, or record a renewed no-replication decision. |
 | `CKV_AWS_145` | Workflow S3 bucket | Cloud One has not supplied an approved customer-managed S3 key or key-administration model. S3 encryption remains enabled by AWS. | Configure the approved KMS key and remove the exception. |
+| `CKV_AWS_394` | Legacy full-application VPC subnets | Environment contracts do not yet provide an approved two-zone allowlist. The current configuration derives availability zones from the selected Region. | Add and enforce the approved availability-zone allowlist when Cloud One supplies it. |
 
 ## Time-bounded development architecture
 
@@ -39,7 +40,5 @@ before the listed date.
 | Policy | Affected resources | Why the exception exists | Resolution condition |
 | --- | --- | --- | --- |
 | `CKV2_AWS_62` | Workflow S3 bucket | DataChord does not use object-event processing; application requests explicitly control workflow operations. | Reassess if an event-driven workflow is introduced. |
-
-Exceptions for stable implementation choices—such as Docker-in-Docker in the
-dedicated CodeBuild image project and TLS termination at the ALB—are documented
-next to their design in `CHECKOV_IMPLEMENTATION_PLAN.md`.
+| `CKV_AWS_316` | Dedicated application-image CodeBuild project | Building the canonical Docker image requires privileged Docker-in-Docker mode. The project has a bounded service role and exists only for the image build. | Remove privileged mode if the build moves to a managed, daemonless, or prebuilt-image process. |
+| `CKV_AWS_378` | Legacy and Cloud One application target groups | TLS terminates at the ALB. Only the ALB security group can reach the application target port, and Cloud One targets remain inside the approved private VPC path. | Reassess if NCI requires end-to-end TLS between the ALB and Fargate tasks. |
