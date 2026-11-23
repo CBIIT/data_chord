@@ -1,4 +1,6 @@
 resource "aws_cloudwatch_log_group" "app" {
+  # checkov:skip=CKV_AWS_338:reason=The environment log-retention period remains an external security decision;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_158:reason=The approved customer-managed logging key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name              = "/ecs/${local.name_prefix}"
   retention_in_days = var.log_retention_days
 
@@ -107,6 +109,11 @@ resource "aws_iam_role_policy" "task_bedrock" {
 resource "aws_ecs_cluster" "app" {
   name = local.name_prefix
 
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
   tags = local.common_tags
 }
 
@@ -130,9 +137,9 @@ resource "aws_security_group" "task" {
 
   egress {
     description = "Outbound AWS API and package access through the VPC egress path"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 

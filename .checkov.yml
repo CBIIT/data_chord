@@ -1,0 +1,5 @@
+framework:
+  - terraform
+skip-download: true
+compact: true
+quiet: true

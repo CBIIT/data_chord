@@ -1,0 +1,5 @@
+# name|directory|comma-separated-skip-paths
+full-application|infra|cloud-one,customer-platform,modules
+cloud-one|infra/cloud-one|
+customer-platform|infra/customer-platform|
+shared-data-plane|infra/modules/data-plane|

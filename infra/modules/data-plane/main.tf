@@ -1,4 +1,10 @@
 resource "aws_s3_bucket" "workflow" {
+  # checkov:skip=CKV2_AWS_62:reason=Workflow object-event processing is not part of the current application design;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_18:reason=The approved S3 access-log destination and retention policy are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV2_AWS_61:reason=Workflow retention and deletion periods remain an external governance decision;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_144:reason=Cross-region replication and disaster-recovery requirements remain an external governance decision;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_145:reason=The approved customer-managed storage key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_21:reason=Object versioning depends on the unresolved workflow retention and recovery policy;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   bucket = "${var.name_prefix}-workflow-${var.account_id}-${var.aws_region}"
 
   tags = merge(var.common_tags, {
@@ -16,6 +22,7 @@ resource "aws_s3_bucket_public_access_block" "workflow" {
 }
 
 resource "aws_dynamodb_table" "reference_data" {
+  # checkov:skip=CKV_AWS_119:reason=The approved customer-managed DynamoDB key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name         = "${var.name_prefix}-reference-data"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
@@ -43,6 +50,7 @@ resource "aws_dynamodb_table" "reference_data" {
 }
 
 resource "aws_dynamodb_table" "harmonization_cache" {
+  # checkov:skip=CKV_AWS_119:reason=The approved customer-managed DynamoDB key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name         = "${var.name_prefix}-harmonization-cache"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "cache_key"
@@ -64,6 +72,7 @@ resource "aws_dynamodb_table" "harmonization_cache" {
 }
 
 resource "aws_dynamodb_table" "cde_recommendation_cache" {
+  # checkov:skip=CKV_AWS_119:reason=The approved customer-managed DynamoDB key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name         = "${var.name_prefix}-cde-recommendation-cache"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "cache_key"
@@ -77,6 +86,12 @@ resource "aws_dynamodb_table" "cde_recommendation_cache" {
     attribute_name = "ttl"
     enabled        = true
   }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  deletion_protection_enabled = true
 
   tags = merge(var.common_tags, {
     Name = "${var.name_prefix}-cde-recommendation-cache"

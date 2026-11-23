@@ -6,6 +6,24 @@ repository owns the AWS account foundation.
 
 See [../DEPLOYMENT.md](../DEPLOYMENT.md) for the operator procedure.
 
+## Infrastructure security scan
+
+Run the same locked Checkov scan used by CI from the repository root:
+
+```bash
+just checkov
+```
+
+The wrapper scans the full application, Cloud One, customer-platform, and
+shared data-plane roots independently. It writes JSON and SARIF evidence under
+`.artifacts/checkov/` and fails when any root has an unsuppressed finding, the
+scanner fails, a report is missing, or the explicit root manifest does not
+cover every committed OpenTofu root.
+
+Prefer remediation over suppression. A resource-level `checkov:skip`
+annotation must include `reason`, `ref`, `owner`, and a `review` date in
+`YYYY-MM-DD` form. The CI wrapper rejects undocumented suppressions.
+
 ## Ownership
 
 The account foundation provides:

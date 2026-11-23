@@ -47,8 +47,41 @@ jobs:
       - name: Test deployment flow
         run: bash infra/tests/deployment_flow_test.sh
 
+      - name: Test Checkov wrapper behavior
+        run: bash infra/tests/checkov_wrapper_test.sh
+
       - name: Check shell syntax
         run: bash scripts/check-shell-syntax.sh
+
+  iac-security:
+    name: Checkov infrastructure security
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.4"
+          enable-cache: true
+          cache-dependency-glob: tools/checkov/uv.lock
+
+      - name: Install the locked Checkov tool
+        run: |
+          uv python install 3.13
+          uv sync --project tools/checkov --frozen
+
+      - name: Scan every OpenTofu root
+        run: bash scripts/check-iac-security.sh
+
+      - name: Upload Checkov evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checkov-${{ github.run_id }}
+          path: .artifacts/checkov/
+          if-no-files-found: warn
+          retention-days: 14
 
   quality:
     name: Code quality and security
@@ -214,6 +247,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - infrastructure
+      - iac-security
       - quality
       - test
       - e2e
@@ -226,6 +260,7 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+          IAC_SECURITY_RESULT: ${{ needs.iac-security.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TEST_RESULT: ${{ needs.test.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
@@ -239,6 +274,7 @@ jobs:
           }
 
           require_result infrastructure "${INFRASTRUCTURE_RESULT}" success
+          require_result iac-security "${IAC_SECURITY_RESULT}" success
           require_result quality "${QUALITY_RESULT}" success
 
           if [ "${EVENT_NAME}" = "pull_request" ] && [ "${HEAD_REPOSITORY}" != "${REPOSITORY}" ]; then
