@@ -19,6 +19,7 @@ def _document() -> dict[str, object]:
         "application_role_path": "/application/",
         "ingress_cidr_blocks": [],
         "internal_dev_preview_enabled": False,
+        "manage_ecr_registry_scanning": True,
         "private_subnet_ids": [],
         "region": "us-east-1",
         "schema_version": 1,
@@ -51,6 +52,7 @@ def test_bootstrap_allows_pending_network_but_runtime_fails_closed(tmp_path: Pat
 
     assert bootstrap.returncode == 0, bootstrap.stderr
     assert json.loads(bootstrap.stdout)["runtime_enabled"] is False
+    assert json.loads(bootstrap.stdout)["manage_ecr_registry_scanning"] is True
     assert runtime.returncode == 2
     assert "blocked until vpc_id is populated" in runtime.stderr
 
@@ -90,6 +92,7 @@ def test_runtime_renders_only_after_exact_network_and_digest(tmp_path: Path) -> 
     assert variables["expected_account_id"] == "211125567571"
     assert variables["aws_region"] == "us-east-1"
     assert variables["internal_dev_preview_enabled"] is True
+    assert variables["manage_ecr_registry_scanning"] is True
 
 
 def test_internal_preview_is_dev_only_and_requires_an_ingress_cidr(tmp_path: Path) -> None:

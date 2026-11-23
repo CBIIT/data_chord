@@ -49,7 +49,8 @@ deployment does not create or change the foundation.
 The `infra/cloud-one/` root is the initial CBIIT non-production deployment. It
 creates the selected middle tier plus its private runtime:
 
-- an immutable, scan-on-push ECR repository;
+- an immutable ECR repository with account-level Amazon Inspector enhanced
+  scanning continuously monitoring every `data-chord-*` repository;
 - one workflow S3 bucket and three DynamoDB tables;
 - an ECS cluster, CloudWatch log group, bounded task roles, and (after network
   completion) one private Fargate service; and
@@ -110,6 +111,16 @@ only non-secret account, state, permissions-boundary, and network identifiers.
 `vpc_id: null` and an empty `private_subnet_ids` list are valid only for
 bootstrap; the runtime command fails closed until they are replaced with the
 approved VPC ticket values.
+
+Amazon ECR enhanced scanning is an account-and-Region singleton. Exactly one
+environment state in each AWS account and Region must set
+`manage_ecr_registry_scanning` to `true`; sibling environment states must set
+it to `false`. The current CBIIT non-production owner is `cbiit/dev`. Its
+registry rule continuously scans repositories named `data-chord-*`, so future
+non-production DataChord repositories inherit coverage without competing for
+the singleton configuration. Configuring enhanced scanning through ECR also
+activates the account's Amazon Inspector ECR integration; the application
+state does not attempt to manage organization-wide Inspector administration.
 
 ## Mutation safety
 

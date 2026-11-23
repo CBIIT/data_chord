@@ -6,6 +6,7 @@
     "0.0.0.0/0"
   ],
   "internal_dev_preview_enabled": true,
+  "manage_ecr_registry_scanning": true,
   "private_subnet_ids": [
     "subnet-4f35f112",
     "subnet-409a0424"

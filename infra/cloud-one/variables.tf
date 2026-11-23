@@ -60,6 +60,12 @@ variable "runtime_enabled" {
   default     = false
 }
 
+variable "manage_ecr_registry_scanning" {
+  description = "Whether this environment state owns the account-and-Region ECR enhanced scanning configuration. Exactly one state per account and Region should enable it."
+  type        = bool
+  default     = false
+}
+
 variable "image_digest" {
   description = "Immutable ECR image digest used by the ECS task definition."
   type        = string
