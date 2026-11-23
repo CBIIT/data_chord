@@ -718,3 +718,10 @@ Region, domain, ARNs, bucket, and table name in the examples above.
 The foundation supports commercial AWS and AWS GovCloud. The current Data Chord
 application deployment supports commercial AWS only because its Application
 Load Balancer uses Cognito authentication.
+
+## Interrupted job recovery
+
+During shutdown the job service gives cancelled workers five seconds to finish. A synchronous
+provider can continue using its private files after that wait. The worker releases them when the
+provider returns. A forced container stop ends the process and its ephemeral storage. An accepted
+job interrupted before publication is recoverable through the existing lease-expiry path.
