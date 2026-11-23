@@ -55,6 +55,9 @@ def test_ci_requires_secretless_bandit_with_explicit_thresholds() -> None:
     assert "BANDIT_RESULT: ${{ needs.bandit.result }}" in required
     assert 'require_result bandit "${BANDIT_RESULT}" success' in required
 
+    test_job = workflow_job(workflow, "test")
+    assert "uv sync --project tools/bandit --locked" in test_job
+
 
 def test_bandit_policy_has_no_blanket_rule_skip() -> None:
     project = tomllib.loads(ROOT_PROJECT.read_text(encoding="utf-8"))

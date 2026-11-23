@@ -173,6 +173,9 @@ jobs:
           app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
 
+      - name: Install the locked Bandit tool for integration tests
+        run: uv sync --project tools/bandit --locked
+
       - name: Run tests
         run: uv run pytest --tb=short
 
