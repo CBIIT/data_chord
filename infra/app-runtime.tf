@@ -13,9 +13,9 @@ resource "aws_security_group" "task" {
 
   egress {
     description = "Outbound AWS/API access"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -23,6 +23,8 @@ resource "aws_security_group" "task" {
 }
 
 resource "aws_cloudwatch_log_group" "app" {
+  # checkov:skip=CKV_AWS_338:reason=The environment log-retention period remains an external security decision;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_158:reason=The approved customer-managed logging key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name              = "/ecs/${local.name_prefix}"
   retention_in_days = 14
 
@@ -69,6 +71,11 @@ resource "aws_iam_role_policy" "application_task_execution_programmatic_api_key"
 
 resource "aws_ecs_cluster" "app" {
   name = local.name_prefix
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
 
   tags = local.common_tags
 }
@@ -182,6 +189,7 @@ resource "aws_ecs_task_definition" "application" {
 }
 
 resource "aws_ecs_service" "app" {
+  # checkov:skip=CKV_AWS_333:reason=The legacy full-AWS root currently runs tasks in routed subnets and requires public task addresses until private egress is designed;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name            = local.name_prefix
   cluster         = aws_ecs_cluster.app.id
   task_definition = aws_ecs_task_definition.application.arn

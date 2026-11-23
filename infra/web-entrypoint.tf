@@ -36,24 +36,29 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  egress {
-    description = "Outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = local.common_tags
 }
 
+resource "aws_vpc_security_group_egress_rule" "alb_to_task" {
+  security_group_id            = aws_security_group.alb.id
+  referenced_security_group_id = aws_security_group.task.id
+  description                  = "Forward application traffic only to ECS tasks"
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
+}
+
 resource "aws_lb" "app" {
+  # checkov:skip=CKV_AWS_150:reason=Deletion protection is intentionally disabled until the legacy full-AWS deployment is promoted beyond development;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_91:reason=The approved S3 access-log destination and retention policy are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV2_AWS_28:reason=The approved WAF policy and ownership model are not yet defined for the application entry point;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   # The new name forces the one-time move from the shared VPC to this app VPC.
-  name               = substr("${local.name_prefix}-web", 0, 32)
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = local.public_subnet_ids
+  name                       = substr("${local.name_prefix}-web", 0, 32)
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = local.public_subnet_ids
+  drop_invalid_header_fields = true
 
   lifecycle {
     # AWS cannot move an existing load balancer between VPCs. The provider
@@ -65,6 +70,7 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
+  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the ALB and the target group is isolated to ALB-to-task traffic within the application VPC;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name                 = substr("${local.name_prefix}-app", 0, 32)
   port                 = 8000
   protocol             = "HTTP"

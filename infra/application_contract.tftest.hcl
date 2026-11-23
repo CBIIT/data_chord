@@ -386,11 +386,11 @@ run "application_owns_a_minimal_public_network" {
       length(aws_subnet.public) == 2 &&
       alltrue([
         for subnet in aws_subnet.public :
-        subnet.vpc_id == aws_vpc.app.id && subnet.map_public_ip_on_launch
+        subnet.vpc_id == aws_vpc.app.id && !subnet.map_public_ip_on_launch
       ]) &&
       length(distinct([for subnet in aws_subnet.public : subnet.availability_zone])) == 2
     )
-    error_message = "The application must own two public subnets in separate availability zones."
+    error_message = "The application must own two public subnets in separate availability zones without automatically assigning public IPs."
   }
 
   assert {

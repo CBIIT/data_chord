@@ -1,4 +1,5 @@
 data "aws_availability_zones" "available" {
+  # checkov:skip=CKV_AWS_394:reason=Environment contracts do not yet carry an approved two-zone allowlist;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   state = "available"
 }
 
@@ -14,12 +15,21 @@ locals {
 }
 
 resource "aws_vpc" "app" {
+  # checkov:skip=CKV2_AWS_11:reason=The approved VPC flow-log destination and retention policy are pending NCI security direction;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
 
   tags = merge(local.common_tags, {
     Name = local.name_prefix
+  })
+}
+
+resource "aws_default_security_group" "app" {
+  vpc_id = aws_vpc.app.id
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-default-deny"
   })
 }
 
@@ -37,7 +47,7 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.app.id
   availability_zone       = each.key
   cidr_block              = each.value
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-public-${each.key}"

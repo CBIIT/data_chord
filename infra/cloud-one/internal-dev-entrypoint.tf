@@ -28,6 +28,9 @@ resource "aws_security_group" "internal_alb" {
 }
 
 resource "aws_lb" "internal_dev" {
+  # checkov:skip=CKV_AWS_150:reason=The no-user internal dev preview is intentionally replaceable while the managed HTTPS endpoint is pending;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_91:reason=The approved centralized ALB access-log bucket and retention policy are not yet available;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV2_AWS_20:reason=The internal dev preview remains HTTP-only until the Cloud One certificate and DNS requests complete;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   count = local.internal_dev_preview_active ? 1 : 0
 
   name                       = substr("${local.name_prefix}-internal", 0, 32)
@@ -41,6 +44,7 @@ resource "aws_lb" "internal_dev" {
 }
 
 resource "aws_lb_target_group" "internal_dev" {
+  # checkov:skip=CKV_AWS_378:reason=TLS terminates at the planned ALB listener and traffic to private Fargate targets remains inside the approved VPC;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   count = local.internal_dev_preview_active ? 1 : 0
 
   name        = substr("${local.name_prefix}-preview", 0, 32)
@@ -63,6 +67,8 @@ resource "aws_lb_target_group" "internal_dev" {
 }
 
 resource "aws_lb_listener" "internal_dev_http" {
+  # checkov:skip=CKV_AWS_2:reason=The internal dev preview remains HTTP-only until the Cloud One certificate and DNS requests complete;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
+  # checkov:skip=CKV_AWS_103:reason=The internal dev preview has no TLS listener until the managed certificate is installed;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   count = local.internal_dev_preview_active ? 1 : 0
 
   load_balancer_arn = aws_lb.internal_dev[0].arn

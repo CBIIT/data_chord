@@ -131,11 +131,13 @@ Run `just --list` to see all shortcuts. These are the main development checks:
 | `npm run typecheck` | JavaScript and TypeScript type check |
 | `just test-e2e` | Local browser tests |
 | `just infra-test` | OpenTofu and deployment-script tests |
+| `just checkov` | Locked Checkov scan of every OpenTofu root |
 
 Pull requests from forks run the infrastructure tests, JavaScript syntax check,
-and JavaScript unit tests. GitHub does not give private dependency credentials
-to forks. A maintainer must review an external change before running the Python,
-type, lint, security, and browser checks on a branch in this repository.
+Checkov infrastructure scan, and JavaScript unit tests. GitHub does not give
+private dependency credentials to forks. A maintainer must review an external
+change before running the Python, type, lint, application-security, and browser
+checks on a branch in this repository.
 
 ### Measure browser performance
 

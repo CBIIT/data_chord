@@ -91,7 +91,12 @@ infra-test:
 	tofu -chdir=infra/customer-platform test
 	tofu -chdir=infra/modules/data-plane test
 	bash infra/tests/deployment_flow_test.sh
+	bash infra/tests/checkov_wrapper_test.sh
 	bash scripts/check-shell-syntax.sh
+
+checkov:
+	uv sync --project tools/checkov --frozen
+	bash scripts/check-iac-security.sh
 
 # Save and show a read-only deployment forecast.
 plan target stage:
