@@ -83,6 +83,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  bandit:
+    name: Bandit source security
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.4"
+          enable-cache: true
+          cache-dependency-glob: tools/bandit/uv.lock
+
+      - name: Install the locked Bandit tool
+        run: |
+          uv python install 3.13
+          uv sync --project tools/bandit --locked
+
+      - name: Scan first-party Python
+        run: scripts/run-bandit.sh
+
   quality:
     name: Code quality and security
     runs-on: ubuntu-24.04
@@ -129,12 +150,6 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository
         run: uv run vulture
 
-      - name: Run bandit
-        if: >-
-          github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.full_name == github.repository
-        run: uv run bandit -r src/ -c pyproject.toml
-
       - name: Run dependency audit
         if: >-
           github.event_name != 'pull_request' ||
@@ -157,6 +172,9 @@ jobs:
         with:
           app-id: ${{ vars.DATA_CHORD_BUILD_APP_ID }}
           private-key: ${{ secrets.DATA_CHORD_BUILD_APP_PRIVATE_KEY }}
+
+      - name: Install the locked Bandit tool for integration tests
+        run: uv sync --project tools/bandit --locked
 
       - name: Run tests
         run: uv run pytest --tb=short
@@ -248,6 +266,7 @@ jobs:
     needs:
       - infrastructure
       - iac-security
+      - bandit
       - quality
       - test
       - e2e
@@ -261,6 +280,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
           IAC_SECURITY_RESULT: ${{ needs.iac-security.result }}
+          BANDIT_RESULT: ${{ needs.bandit.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TEST_RESULT: ${{ needs.test.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
@@ -275,6 +295,7 @@ jobs:
 
           require_result infrastructure "${INFRASTRUCTURE_RESULT}" success
           require_result iac-security "${IAC_SECURITY_RESULT}" success
+          require_result bandit "${BANDIT_RESULT}" success
           require_result quality "${QUALITY_RESULT}" success
 
           if [ "${EVENT_NAME}" = "pull_request" ] && [ "${HEAD_REPOSITORY}" != "${REPOSITORY}" ]; then

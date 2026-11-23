@@ -19,7 +19,8 @@ def main() -> None:
 
     from backend.app.main import app
 
-    uvicorn.run(app, host="0.0.0.0", port=8000, proxy_headers=True)
+    # The demo server must listen on the container interface; run_demo.sh publishes it only to host loopback.
+    uvicorn.run(app, host="0.0.0.0", port=8000, proxy_headers=True)  # nosec B104
 
 
 if __name__ == "__main__":
