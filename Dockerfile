@@ -5,7 +5,7 @@ FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158
 # Amazon Linux 2023 is the deployment platform's maintained, minimal base.
 # Pin the dated AL2023 release and its multi-architecture manifest digest so
 # builds stay reproducible while avoiding Debian packages with no fixed release.
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261016.0-minimal@sha256:db31805b873599314c8b7cf394ccf8ba798c07361f0d773fdeb8efb48a02ecac AS builder
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261112.0-minimal@sha256:158a9044f9dc0777f098b76c8b54346f6ed4560b9a6a416dec7a5ba3bc483af4 AS builder
 
 ARG DATA_CHORD_INCLUDE_LOCAL_INFERENCE=false
 
@@ -36,22 +36,22 @@ RUN --mount=type=secret,id=github_token \
     esac \
     && git config --global --unset-all url."https://x-access-token:${github_token}@github.com/".insteadOf
 
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261016.0-minimal@sha256:db31805b873599314c8b7cf394ccf8ba798c07361f0d773fdeb8efb48a02ecac AS runtime
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261112.0-minimal@sha256:158a9044f9dc0777f098b76c8b54346f6ed4560b9a6a416dec7a5ba3bc483af4 AS runtime
 
 RUN dnf install -y --releasever=latest \
         libstdc++ \
         python3.13-3.13.16-1.amzn2023.0.1 \
         python3.13-libs-3.13.16-1.amzn2023.0.1 \
         python3.13-pip-wheel-24.2-259.amzn2023.0.9 \
-        openssl-libs-3.5.8-1.amzn2023.0.3 \
-        openssl-fips-provider-latest-3.5.8-1.amzn2023.0.3 \
+        openssl-libs-3.5.8-1.amzn2023.0.4 \
+        openssl-fips-provider-latest-3.5.8-1.amzn2023.0.4 \
         pcre2-10.40-1.amzn2023.0.5 \
         pcre2-syntax-10.40-1.amzn2023.0.5 \
         expat-2.8.3-1.amzn2023.0.1 \
-        rpm-4.16.1.3-29.amzn2023.0.8 \
-        rpm-libs-4.16.1.3-29.amzn2023.0.8 \
-        libcurl-minimal-8.21.0-5.amzn2023.0.3 \
-        curl-minimal-8.21.0-5.amzn2023.0.3 \
+        rpm-4.16.1.3-29.amzn2023.0.10 \
+        rpm-libs-4.16.1.3-29.amzn2023.0.10 \
+        libcurl-minimal-8.21.0-5.amzn2023.0.4 \
+        curl-minimal-8.21.0-5.amzn2023.0.4 \
         libcap-2.73-1.amzn2023.0.8 \
     && dnf clean all \
     && rm -rf /var/cache/dnf
