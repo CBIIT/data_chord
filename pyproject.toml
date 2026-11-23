@@ -77,7 +77,6 @@ typeCheckingMode = "standard"
 
 [tool.bandit]
 exclude_dirs = ["tests"]
-skips = ["B101"]  # skip assert warnings (used in tests)
 
 [tool.vulture]
 paths = ["src", "tests"]
