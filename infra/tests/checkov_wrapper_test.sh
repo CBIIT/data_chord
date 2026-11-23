@@ -90,20 +90,6 @@ grep -q '| `infra/customer-platform` | ERROR | 1 | 0 | 0 |' \
   "${missing_report_artifacts}/summary.md"
 test -s "${missing_report_artifacts}/shared-data-plane/results.sarif"
 
-rg_failure_bin="${test_directory}/rg-failure-bin"
-mkdir -p "${rg_failure_bin}"
-cat > "${rg_failure_bin}/rg" <<'EOF'
-#!/usr/bin/env bash
-exit 2
-EOF
-chmod +x "${rg_failure_bin}/rg"
-if PATH="${rg_failure_bin}:${PATH}" CHECKOV_UV_BIN="${fake_uv}" \
-  CHECKOV_ARTIFACT_ROOT="${test_directory}/rg-failure" \
-  bash scripts/check-iac-security.sh; then
-  echo "Checkov wrapper unexpectedly passed when suppression discovery failed." >&2
-  exit 1
-fi
-
 hash_failure_bin="${test_directory}/hash-failure-bin"
 mkdir -p "${hash_failure_bin}"
 cat > "${hash_failure_bin}/sha256sum" <<'EOF'
@@ -165,10 +151,22 @@ rm -f "${invalid_suppression_file}"
 
 mkdir -p "${unregistered_root}"
 printf '%s\n' 'resource "terraform_data" "fixture" {}' > "${unregistered_root}/main.tf"
-temporary_index="${test_directory}/git-index"
-cp "$(git rev-parse --git-path index)" "${temporary_index}"
-GIT_INDEX_FILE="${temporary_index}" git add "${unregistered_root}/main.tf"
-if GIT_INDEX_FILE="${temporary_index}" CHECKOV_UV_BIN="${fake_uv}" \
+git_with_unregistered_root="${test_directory}/git-with-unregistered-root"
+mkdir -p "${git_with_unregistered_root}"
+real_git="$(command -v git)"
+cat > "${git_with_unregistered_root}/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" -eq 3 && "$1" = "ls-files" && "$2" = "--" && "$3" = "infra" ]]; then
+  "${REAL_GIT}" "$@"
+  echo "infra/modules/.checkov-wrapper-unregistered/main.tf"
+else
+  exec "${REAL_GIT}" "$@"
+fi
+EOF
+chmod +x "${git_with_unregistered_root}/git"
+if PATH="${git_with_unregistered_root}:${PATH}" REAL_GIT="${real_git}" \
+  CHECKOV_UV_BIN="${fake_uv}" \
   CHECKOV_ARTIFACT_ROOT="${test_directory}/unregistered-root" \
   bash scripts/check-iac-security.sh; then
   echo "Checkov wrapper unexpectedly passed an unregistered committed IaC directory." >&2

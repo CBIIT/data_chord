@@ -26,7 +26,6 @@ for required in \
 done
 
 command -v "${uv_bin}" >/dev/null 2>&1 || die "uv is required to run the locked Checkov tool environment."
-command -v rg >/dev/null 2>&1 || die "ripgrep is required to validate Checkov suppressions."
 command -v python3 >/dev/null 2>&1 || die "Python is required to validate Checkov suppressions."
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to hash Checkov evidence inputs."
 
@@ -49,19 +48,8 @@ if ! diff -u "${manifest_directories}" "${tracked_directories}"; then
   die "The Checkov root manifest does not match the committed OpenTofu roots."
 fi
 
-suppressions_file="${tmp_dir}/suppressions.txt"
 suppression_summary="${tmp_dir}/suppression-summary.md"
-if rg -n 'checkov:skip=' infra -g '*.tf' > "${suppressions_file}"; then
-  :
-else
-  suppression_search_status=$?
-  if [[ "${suppression_search_status}" -ne 1 ]]; then
-    die "Unable to inventory Checkov suppressions with ripgrep."
-  fi
-fi
-sort -o "${suppressions_file}" "${suppressions_file}"
 python3 "${suppression_validator}" \
-  --input "${suppressions_file}" \
   --repository-root "${repository_root}" \
   > "${suppression_summary}"
 

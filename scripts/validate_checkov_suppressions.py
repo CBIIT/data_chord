@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from dataclasses import dataclass
 from datetime import date
@@ -12,7 +11,6 @@ from pathlib import Path
 
 ANNOTATION_MARKER = "checkov:skip="
 REQUIRED_FIELDS = {"reason", "ref", "owner", "review"}
-SOURCE_PATTERN = re.compile(r"^(?P<path>.+?):(?P<line>[0-9]+):")
 
 
 @dataclass(frozen=True)
@@ -28,7 +26,6 @@ class Suppression:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     return parser.parse_args()
 
@@ -77,11 +74,13 @@ def validate_reference(value: str, repository_root: Path) -> None:
         raise ValueError(f"reference file does not exist: {value}")
 
 
-def parse_suppression(raw_line: str, repository_root: Path, today: date) -> Suppression:
-    source_match = SOURCE_PATTERN.match(raw_line)
-    if source_match is None:
-        raise ValueError("suppression source must include a path and line number")
-
+def parse_suppression(
+    source_path: str,
+    source_line: int,
+    raw_line: str,
+    repository_root: Path,
+    today: date,
+) -> Suppression:
     _, marker, annotation = raw_line.partition(ANNOTATION_MARKER)
     if not marker:
         raise ValueError(f"suppression is missing {ANNOTATION_MARKER}")
@@ -95,8 +94,8 @@ def parse_suppression(raw_line: str, repository_root: Path, today: date) -> Supp
     validate_reference(fields["ref"], repository_root)
 
     return Suppression(
-        source_path=source_match.group("path"),
-        source_line=int(source_match.group("line")),
+        source_path=source_path,
+        source_line=source_line,
         policy=policy.strip(),
         reason=fields["reason"],
         reference=fields["ref"],
@@ -111,13 +110,30 @@ def main() -> int:
     failures: list[str] = []
     suppressions: list[Suppression] = []
 
-    for raw_line in arguments.input.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            suppressions.append(parse_suppression(raw_line, repository_root, date.today()))
-        except ValueError as error:
-            failures.append(f"{raw_line}: {error}")
+    infrastructure_root = repository_root / "infra"
+    if not infrastructure_root.is_dir():
+        print("::error::Infrastructure directory does not exist: infra", file=sys.stderr)
+        return 1
+
+    for source_file in sorted(infrastructure_root.rglob("*.tf")):
+        source_path = source_file.relative_to(repository_root).as_posix()
+        for source_line, raw_line in enumerate(
+            source_file.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if ANNOTATION_MARKER not in raw_line:
+                continue
+            try:
+                suppressions.append(
+                    parse_suppression(
+                        source_path,
+                        source_line,
+                        raw_line,
+                        repository_root,
+                        date.today(),
+                    )
+                )
+            except ValueError as error:
+                failures.append(f"{source_path}:{source_line}: {error}")
 
     if failures:
         for failure in failures:
