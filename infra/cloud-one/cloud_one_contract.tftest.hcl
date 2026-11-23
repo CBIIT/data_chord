@@ -37,6 +37,7 @@ variables {
   deployment_target             = "cbiit"
   environment                   = "dev"
   application_role_boundary_arn = "arn:aws:iam::211125567571:policy/cbiit-datachord-application-role-boundary"
+  manage_ecr_registry_scanning  = true
   runtime_enabled               = false
 }
 
@@ -55,11 +56,36 @@ run "bootstrap_creates_registry_data_and_runtime_foundation_without_network" {
 
   assert {
     condition = (
+      length(aws_ecr_registry_scanning_configuration.app) == 1 &&
+      one(aws_ecr_registry_scanning_configuration.app).scan_type == "ENHANCED" &&
+      one(one(aws_ecr_registry_scanning_configuration.app).rule).scan_frequency == "CONTINUOUS_SCAN" &&
+      one(one(one(aws_ecr_registry_scanning_configuration.app).rule).repository_filter).filter == "data-chord-*"
+    )
+    error_message = "The designated account owner must enable continuous Inspector scanning for DataChord ECR repositories."
+  }
+
+  assert {
+    condition = (
       output.runtime_environment.DATA_CHORD_AGENTIC_WORKERS == "5" &&
       output.runtime_environment.DATA_CHORD_MAX_ACTIVE_JOBS == "1" &&
       output.runtime_environment.DATA_CHORD_IDENTITY_SOURCE == "trusted_proxy"
     )
     error_message = "The dev runtime must retain the researched concurrency and fail-closed identity settings."
+  }
+}
+
+run "non_owner_environment_does_not_manage_registry_scanning" {
+  command = plan
+
+  variables {
+    manage_ecr_registry_scanning = false
+  }
+
+  assert {
+    condition = (
+      length(aws_ecr_registry_scanning_configuration.app) == 0
+    )
+    error_message = "A non-owner environment must not compete for account-and-Region Inspector or ECR registry settings."
   }
 }
 

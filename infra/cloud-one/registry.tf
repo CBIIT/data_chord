@@ -15,6 +15,21 @@ resource "aws_ecr_repository" "app" {
   tags = local.common_tags
 }
 
+resource "aws_ecr_registry_scanning_configuration" "app" {
+  count = var.manage_ecr_registry_scanning ? 1 : 0
+
+  scan_type = "ENHANCED"
+
+  rule {
+    scan_frequency = "CONTINUOUS_SCAN"
+
+    repository_filter {
+      filter      = "data-chord-*"
+      filter_type = "WILDCARD"
+    }
+  }
+}
+
 resource "aws_ecr_lifecycle_policy" "app" {
   repository = aws_ecr_repository.app.name
   policy = jsonencode({

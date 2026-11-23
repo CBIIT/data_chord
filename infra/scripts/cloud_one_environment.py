@@ -18,6 +18,7 @@ _FIELDS = {
     "application_role_path",
     "ingress_cidr_blocks",
     "internal_dev_preview_enabled",
+    "manage_ecr_registry_scanning",
     "private_subnet_ids",
     "region",
     "schema_version",
@@ -45,6 +46,7 @@ class Environment:
     application_role_path: str
     ingress_cidr_blocks: tuple[str, ...]
     internal_dev_preview_enabled: bool
+    manage_ecr_registry_scanning: bool
     private_subnet_ids: tuple[str, ...]
     region: str
     state_bucket_name: str
@@ -67,6 +69,7 @@ class Environment:
             "image_digest": image_digest,
             "ingress_cidr_blocks": list(self.ingress_cidr_blocks),
             "internal_dev_preview_enabled": self.internal_dev_preview_enabled if runtime_enabled else False,
+            "manage_ecr_registry_scanning": self.manage_ecr_registry_scanning,
             "private_subnet_ids": list(self.private_subnet_ids),
             "runtime_enabled": runtime_enabled,
             "vpc_id": self.vpc_id,
@@ -96,6 +99,7 @@ def load(path: Path, target: str, stage: str) -> Environment:
         application_role_path=_string(document, "application_role_path"),
         ingress_cidr_blocks=_strings(document, "ingress_cidr_blocks"),
         internal_dev_preview_enabled=_boolean(document, "internal_dev_preview_enabled"),
+        manage_ecr_registry_scanning=_boolean(document, "manage_ecr_registry_scanning"),
         private_subnet_ids=_strings(document, "private_subnet_ids"),
         region=_string(document, "region"),
         state_bucket_name=_string(document, "state_bucket_name"),
