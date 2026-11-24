@@ -12,6 +12,7 @@ from netrias_client import read_tabular
 from src.app.harmonization_readiness import (
     REVIEW_STATE_RECOVERY_DETAIL,
     HarmonizationNotReadyError,
+    ReadyHarmonization,
     capture_ready_harmonization,
     load_readable_review_overrides_record,
     require_review_state_matches_manifest,
@@ -38,6 +39,7 @@ from src.persistence.review_override_store import (
 from src.persistence.workflow_artifacts import (
     open_generated_artifact,
     open_upload_artifact,
+    upload_is_available,
 )
 from src.stage_4_review_results.schemas import (
     CellOverrideSchema,
@@ -88,13 +90,7 @@ def build_stage_four_rows(
     with performance_span("stage4.rows.ready_capture"):
         ready = capture_ready_harmonization(workflow_storage, user, file_id, expected_job_id)
     loaded_state = ready.workflow
-    with performance_span("stage4.rows.upload_artifact"), open_upload_artifact(
-        upload_storage, workflow_storage, user, file_id,
-    ) as meta:
-        if not meta:
-            raise HarmonizationNotReadyError("Upload not found. Return to Stage 1 and upload it again.")
-        with performance_span("stage4.rows.source_dataset_read"):
-            original_dataset = read_tabular(meta.saved_path, sheet_name=loaded_state.state.selected_sheet)
+    original_row_count = _original_row_count(ready, upload_storage, workflow_storage, user)
 
     with performance_span("stage4.rows.manifest_read"):
         manifest = _load_manifest(workflow_storage, user, file_id)
@@ -133,7 +129,7 @@ def build_stage_four_rows(
             job_id=ready.job.job.polling_job_id,
             columns=columns,
             columnPVs=column_pvs,
-            totalOriginalRows=len(original_dataset.rows),
+            totalOriginalRows=original_row_count,
             reviewState=(
                 ReviewOverridesSchema.model_validate(
                     review_record.value.to_snapshot_payload()
@@ -504,6 +500,27 @@ def _validate_review_snapshot(
                 )
 
 
+def _original_row_count(
+    ready: ReadyHarmonization,
+    upload_storage: UploadStorage,
+    workflow_storage: WorkflowStorage,
+    user: UserContext,
+) -> int:
+    state = ready.workflow.state
+    summary = ready.job.job.manifest_summary
+    if summary is not None and summary.source_row_count is not None:
+        with performance_span("stage4.rows.upload_available"):
+            original_is_available = upload_is_available(upload_storage, workflow_storage, user, state.file_id)
+        if original_is_available:
+            return summary.source_row_count
+
+    with performance_span("stage4.rows.upload_artifact"), open_upload_artifact(
+        upload_storage, workflow_storage, user, state.file_id,
+    ) as meta:
+        if not meta:
+            raise HarmonizationNotReadyError("Upload not found. Return to Stage 1 and upload it again.")
+        with performance_span("stage4.rows.source_dataset_read"):
+            return len(read_tabular(meta.saved_path, sheet_name=state.selected_sheet).rows)
 __all__ = [
     "InvalidReviewOverrideSelectionError",
     "ReviewStateConflictError",
