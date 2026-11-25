@@ -97,7 +97,7 @@ jobs:
           aws-region: ${{ steps.environment.outputs.region }}
           allowed-account-ids: ${{ steps.environment.outputs.account_id }}
           inline-session-policy: >-
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:GetRegistryScanningConfiguration","inspector2:ListCoverage"],"Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ steps.environment.outputs.region }}:${{ steps.environment.outputs.account_id }}:repository/data-chord-dev"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:GetRegistryScanningConfiguration","inspector2:ListCoverage","inspector2:ListFindings"],"Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ steps.environment.outputs.region }}:${{ steps.environment.outputs.account_id }}:repository/data-chord-dev"}]}
 
       - name: Require Amazon Inspector before any image push
         run: |

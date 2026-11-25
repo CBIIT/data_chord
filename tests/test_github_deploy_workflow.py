@@ -193,6 +193,7 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert "Require Amazon Inspector before any image push" in workflow
     assert workflow.index("get-registry-scanning-configuration") < workflow.index("docker push")
     assert "inspector2:ListCoverage" in workflow
+    assert "inspector2:ListFindings" in workflow
     assert "ecr_image.py digest" in workflow
     assert "ecr_image.py scan" in workflow
     assert "--purpose publication" in workflow
