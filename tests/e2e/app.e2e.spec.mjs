@@ -1,6 +1,8 @@
+import { fulfillReview, reviewParts } from './utils.mjs';
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import {
   AGENT_FILE_INPUT,
@@ -175,6 +177,7 @@ const _openStage2SearchHarness = async (page) => {
     },
   ];
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -793,7 +796,8 @@ test('happy path flow: upload → analyze → harmonize → review → summary �
     1: { col_0001: 'Baz' },
   });
 
-  // The completed Stage 3 view uses the durable production-shaped summary.
+  // Reopen the completed job from storage after replacing the initial mock with its saved summary.
+  await page.evaluate(() => sessionStorage.removeItem('stage3HarmonizeJob'));
   const durableJobId = `e2e-job-${fileId}`;
   await page.goto(`/stage-3?file_id=${fileId}&job_id=${durableJobId}`);
   const stageThreeTable = page.locator('[data-column-outcome-table] .column-outcome-table');
@@ -822,9 +826,9 @@ test('happy path flow: upload → analyze → harmonize → review → summary �
   await page.click('#stageFiveButton');
   await page.waitForURL(/\/stage-5/);
   await expect(page.locator('.quality-certificate')).toBeVisible();
-  await expect(page.locator('[data-impact-metric="total_values"]')).toContainText('2');
-  await expect(page.locator('[data-impact-metric="unique_values"]')).toContainText('1');
-  await expect(page.locator('[data-impact-metric="manual_values"]')).toContainText('0');
+  await expect(page.locator('[data-change-total="ai"]')).toHaveText('1 by AI');
+  await expect(page.locator('[data-change-total="you"]')).toHaveText('0 by you');
+  await expect(page.locator('[data-change-total="cells"]')).toHaveText('· 2 cells changed');
   await expect(page.locator('.provenance-line')).toHaveCount(0);
 
   const rows = await downloadCsvRows(page, fileId);
@@ -1246,23 +1250,6 @@ test('Stage 5 confirms start-over after successful download and clears browser w
    *        and confirm clears Data Chord workflow keys before returning to Stage 1.
    */
   await mockHarmonizeSuccess(page);
-  let downloadAttempts = 0;
-  await page.route('**/stage-5/download', async (route) => {
-    downloadAttempts += 1;
-    if (downloadAttempts === 1) {
-      await route.fulfill({ status: 500, body: 'Download failed' });
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      headers: {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': 'attachment; filename="harmonized_data.zip"',
-      },
-      body: 'zip-bytes',
-    });
-  });
-
   const fileId = await uploadAndAnalyze(page, fileFixture('basic.csv'));
   await clickHarmonize(page);
   await expect(page.locator('#reviewButton')).toBeEnabled();
@@ -1273,7 +1260,7 @@ test('Stage 5 confirms start-over after successful download and clears browser w
   await waitForReviewRows(page);
   await page.click('#stageFiveButton');
   await page.waitForURL(/\/stage-5/);
-  await page.locator('#summaryGrid').waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: /Change details/ }).waitFor({ state: 'visible' });
 
   // Given: workflow state exists, while an unrelated session key should be preserved.
   await page.evaluate(() => {
@@ -1292,6 +1279,15 @@ test('Stage 5 confirms start-over after successful download and clears browser w
   expect(keysBeforeStartOver.maxReachedStage).not.toBeNull();
   expect(keysBeforeStartOver.unrelatedKey).toBe('keep-me');
   await expect(page.locator('#uploadNavAction')).toHaveClass(/hidden/);
+
+  // Given the browser fails to create its first local download.
+  await page.evaluate(() => {
+    const create = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = blob => {
+      URL.createObjectURL = create;
+      throw new Error('Download failed');
+    };
+  });
 
   // When: the download fails.
   await page.click('#downloadResults');
@@ -1347,13 +1343,12 @@ test('Stage 5 confirms start-over after successful download and clears browser w
   });
 });
 
-test('Stage 5 shows recovery detail for summary and download failures', async ({ page }) => {
+test('Stage 5 shows recovery detail when the reviewed download cannot be prepared', async ({ page }) => {
   const fileId = '0123456789abcdef0123456789abcdef';
   const recoveryDetail = 'The saved review state cannot be read. Return to Stage 3 and run harmonization again.';
-  const downloadDetail = 'The saved review state cannot be read. Return to Stage 3 and run harmonization again.';
 
-  // Given: the summary loads, but the next download reports an unreadable review state.
-  await page.route('**/stage-5/summary', async (route) => {
+  // Given: the review cannot be prepared because its saved state is unreadable.
+  await page.route('**/stage-5/review', async (route) => {
     await route.fulfill({
       status: 409,
       contentType: 'application/json',
@@ -1364,46 +1359,15 @@ test('Stage 5 shows recovery detail for summary and download failures', async ({
   // When: the reviewer opens Stage 5.
   await page.goto(`/stage-5?file_id=${fileId}`);
 
-  // Then: summary recovery detail and a Stage 3 link are shown.
-  const summaryError = page.locator('#summaryGrid .summary-empty');
+  // Then: summary recovery detail and a Stage 3 link are shown in the header card without opening anything.
+  const summaryError = page.locator('.quality-certificate #changeFlow .change-flow__message');
   await expect(summaryError).toBeVisible();
+  await expect(page.getByRole('button', { name: /Change details/ })).toHaveCount(0);
   await expect(summaryError).toContainText(recoveryDetail);
   const summaryRecoveryLink = summaryError.getByRole('link', { name: 'Return to Stage 3' });
   await expect(summaryRecoveryLink).toHaveAttribute('href', `/stage-3?file_id=${fileId}`);
 
-  // Given: the summary endpoint is healthy and the download endpoint reports server detail.
-  await page.unroute('**/stage-5/summary');
-  await page.route('**/stage-5/summary', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        dataset: { filename: 'recovery.csv', tabular_format: 'csv', data_model_key: 'gc', external_version_number: '11.0.4' },
-        column_summaries: [],
-        term_mappings: [],
-        non_conformant_items: [],
-      }),
-    });
-  });
-  await page.reload();
-  await expect(page.locator('#downloadResults')).toBeEnabled();
-  await page.route('**/stage-5/download', async (route) => {
-    await route.fulfill({
-      status: 409,
-      contentType: 'application/json',
-      body: JSON.stringify({ detail: downloadDetail }),
-    });
-  });
 
-  // When: the reviewer requests the download.
-  await page.locator('#downloadResults').click();
-
-  // Then: the download error uses the server detail and keeps recovery available.
-  const downloadError = page.locator('#downloadError');
-  await expect(downloadError).toBeVisible();
-  await expect(downloadError).toContainText(downloadDetail);
-  await expect(downloadError.getByRole('link', { name: 'Return to Stage 3' }))
-    .toHaveAttribute('href', `/stage-3?file_id=${fileId}`);
 });
 
 test('Stage 2 list opens a takeover on row click', async ({ page }) => {
@@ -1524,6 +1488,7 @@ test('Stage 2 rename search finds and selects a misspelled standard', async ({ p
 });
 
 test('Stage 2 splits picker sections by mapping kind', async ({ page }) => {
+  // Given columns with standard term lists, pass-through targets, and unmapped values.
   const payload = {
     file_id: 'abcdef0123456789abcdef0123456789',
     file_name: 'mixed.csv',
@@ -1563,6 +1528,7 @@ test('Stage 2 splits picker sections by mapping kind', async ({ page }) => {
     _stage2Cde('age_cde', 'passthrough'),
   ];
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -1613,9 +1579,11 @@ test('Stage 2 splits picker sections by mapping kind', async ({ page }) => {
   await expect(page.locator('.mapping-row', { hasText: 'notes' }).locator('.mapping-row-fit--na')).toHaveText('N/A');
   await expect(page.locator('.mapping-row', { hasText: 'age_value' }).locator('.mapping-row-fit--na')).toHaveText('N/A');
 
+  // When the reviewer opens the diagnosis column picker.
   await page.locator('.mapping-row', { hasText: 'diagnosis' }).click();
   await page.locator('#cdePicker').click();
 
+  // Then the picker separates targets with and without permissible values.
   await expect(page.locator('.dd-section-label', { hasText: 'Common data elements with permissible values' })).toBeVisible();
   await expect(page.locator('.dd-section-label', { hasText: 'Common data elements with no permissible values' })).toBeVisible();
   const passthroughRow = page.locator('.dd-section--rename-only .dd-opt', { hasText: 'notes_cde' });
@@ -1637,13 +1605,7 @@ test('Stage 2 splits picker sections by mapping kind', async ({ page }) => {
 });
 
 test('Stage 2 settings sidebar filters rows by mapping outcome', async ({ page }) => {
-  /*
-   * Given: Stage 2 with four columns covering each outcome — one PV-mapped,
-   *        two pass-through-mapped, and one unmapped.
-   * When:  the user changes visibility from the Settings sidebar.
-   * Then:  the list narrows by effective mapping outcome, and overrides update
-   *        the outcome counts.
-   */
+  // Given a mapping page with all three mapping outcomes.
   const payload = {
     file_id: 'abcdef0123456789abcdef0123456789',
     file_name: 'mixed.csv',
@@ -1676,6 +1638,7 @@ test('Stage 2 settings sidebar filters rows by mapping outcome', async ({ page }
     _stage2Cde('notes_cde', 'passthrough'),
   ];
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -1726,8 +1689,9 @@ test('Stage 2 settings sidebar filters rows by mapping outcome', async ({ page }
   await expect(page.locator('.fm-check[data-outcome="passthrough"] .fm-check-count')).toHaveText('2 / 4');
   await expect(page.locator('.fm-check[data-outcome="unchanged"] .fm-check-count')).toHaveText('1 / 4');
 
-  // Hiding pass-through rows leaves only the PV-mapped and unmapped rows.
+  // When the reviewer hides the pass-through outcome.
   await page.locator('.fm-check[data-outcome="passthrough"]').click();
+  // Then only the matching rows remain visible.
   await expect(page.locator('#mappingRows .mapping-row')).toHaveCount(2);
   await expect(page.locator('#mappingRows')).toContainText('dx_col');
   await expect(page.locator('#mappingRows')).toContainText('junk_col');
@@ -1756,11 +1720,7 @@ test('Stage 2 settings sidebar filters rows by mapping outcome', async ({ page }
 });
 
 test('Stage 2 empty-column filter uses full-column value presence', async ({ page }) => {
-  /*
-   * Given: one analyzed column has values and one is blank
-   * When:  Stage 2 renders with the default empty-column filter
-   * Then:  that column remains visible, while the truly blank column is hidden.
-   */
+  // Given one empty column and one with a value after the first displayed rows.
   const payload = {
     file_id: 'abcdef0123456789abcdef0123456789',
     file_name: 'late-values.csv',
@@ -1783,6 +1743,7 @@ test('Stage 2 empty-column filter uses full-column value presence', async ({ pag
     manifest: { column_mappings: {} },
   };
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -1795,8 +1756,10 @@ test('Stage 2 empty-column filter uses full-column value presence', async ({ pag
     });
   });
 
+  // When the reviewer opens the mapping page.
   await page.goto('/stage-2?file_id=abcdef0123456789abcdef0123456789&data_model_key=gc&external_version_number=11.0.4');
 
+  // Then only the column containing a value appears until empty columns are enabled.
   await expect(page.locator('#mappingRows .mapping-row')).toHaveCount(1);
   await expect(page.locator('#mappingRows')).toContainText('late_value');
   await expect(page.locator('#mappingRows')).not.toContainText('all_blank');
@@ -1808,12 +1771,7 @@ test('Stage 2 empty-column filter uses full-column value presence', async ({ pag
 });
 
 test('Stage 2 submits selected column renames for harmonization', async ({ page }) => {
-  /*
-   * Given: Stage 2 has a mapped column whose CDE label differs from the source header.
-   * When:  the user enables rename-to-standard and continues to harmonization.
-   * Then:  one request durably saves the choices and queues Stage 3, with
-   *        column_renames separate from CDE overrides.
-   */
+  // Given a column with a proposed output name and renaming initially disabled.
   const payload = {
     file_id: 'abcdef0123456789abcdef0123456789',
     file_name: 'rename.csv',
@@ -1841,6 +1799,7 @@ test('Stage 2 submits selected column renames for harmonization', async ({ page 
     cde_type: 'pv',
   }];
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -1885,12 +1844,13 @@ test('Stage 2 submits selected column renames for harmonization', async ({ page 
   const before = await page.evaluate(() => JSON.parse(sessionStorage.getItem('stage2Payload')).column_renames);
   expect(before).toBeUndefined();
 
-  // Enable renaming and continue.
+  // When the reviewer enables renaming and starts harmonization.
   await page.locator('#filterSidebarTrigger').click();
   await page.locator('.fs-rename-toggle').click();
   await page.locator('#harmonizeButton').click();
   await page.waitForURL(/\/stage-3/);
 
+  // Then the saved choices and job request use the reviewed column name and upload.
   expect(choicesRequests).toEqual([{
     file_id: 'abcdef0123456789abcdef0123456789',
     manual_overrides: {},
@@ -1907,6 +1867,7 @@ test('Stage 2 submits selected column renames for harmonization', async ({ page 
 });
 
 test('Stage 2 restores overridden column details one request at a time', async ({ page }) => {
+  // Given two saved overrides that need column details.
   const fileId = 'abcdef0123456789abcdef0123456789';
   const payload = {
     file_id: fileId,
@@ -1927,6 +1888,7 @@ test('Stage 2 restores overridden column details one request at a time', async (
   let maximumActiveRequests = 0;
   let completedRequests = 0;
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -1971,7 +1933,9 @@ test('Stage 2 restores overridden column details one request at a time', async (
     }
   });
 
+  // When the reviewer reopens the mapping page.
   await page.goto(`/stage-2?file_id=${fileId}&data_model_key=gc&external_version_number=11.0.4`);
+  // Then both details load in sequence and both rows appear.
   await expect.poll(() => completedRequests).toBe(2);
 
   expect(maximumActiveRequests).toBe(1);
@@ -1979,16 +1943,7 @@ test('Stage 2 restores overridden column details one request at a time', async (
 });
 
 test('Stage 2 picker surfaces all AI candidates as separate rows', async ({ page }) => {
-  /*
-   * Given: cde_targets["diagnosis"] contains two ranked AI candidates.
-   * When:  the user opens the picker for that column.
-   * Then:  both candidates render as suggestion rows in similarity order
-   *        (top first) under the "AI suggestions"
-   *        section header, and neither key appears in the lower sections
-   *        for CDEs with/without permissible values. Picking a candidate
-   *        updates the row's target CDE while preserving the rewrite
-   *        outcome for PV CDEs.
-   */
+  // Given two ranked suggestions for a diagnosis column.
   const payload = {
     file_id: 'abcdef0123456789abcdef0123456789',
     file_name: 'multi.csv',
@@ -2016,6 +1971,7 @@ test('Stage 2 picker surfaces all AI candidates as separate rows', async ({ page
     _stage2Cde('notes_cde', 'passthrough'),
   ];
 
+  await page.route(`**/stage-1/analysis/${payload.file_id}`, (route) => route.fulfill({ json: payload }));
   await page.addInitScript((stagePayload) => {
     sessionStorage.setItem('stage2Payload', JSON.stringify(stagePayload));
     sessionStorage.setItem('maxReachedStage', 'mapping');
@@ -2055,14 +2011,14 @@ test('Stage 2 picker surfaces all AI candidates as separate rows', async ({ page
     });
   });
 
+  // When the reviewer opens the mapped column and its picker.
   await page.goto('/stage-2?file_id=abcdef0123456789abcdef0123456789&data_model_key=gc&external_version_number=11.0.4');
 
   // Open takeover for the diagnosis column, then open the picker.
   await page.locator('.mapping-row', { hasText: 'diagnosis' }).click();
   await page.locator('#cdePicker').click();
 
-  // The suggestion section shows both candidates in overlap order. The
-  // per-row badge is absent because the section header conveys the source.
+  // Then both candidates appear under AI suggestions in their ranked order.
   await expect(
     page.locator('.dd-section-label', { hasText: 'AI suggestions' })
   ).toBeVisible();
@@ -2364,12 +2320,13 @@ test('no-change flow shows empty review state and zero outcome metrics', async (
   // Then: the final certificate reports an explicit zero-change aggregate
   await page.goto(`/stage-5?file_id=${fileId}`);
   await expect(page.locator('.quality-certificate')).toBeVisible();
-  await expect(page.locator('[data-impact-metric="total_values"]')).toContainText('0');
-  await expect(page.locator('[data-impact-metric="unique_values"]')).toContainText('0');
-  await expect(page.locator('[data-impact-metric="manual_values"]')).toContainText('0');
+  await expect(page.locator('[data-change-total="ai"]')).toHaveText('0 by AI');
+  await expect(page.locator('[data-change-total="you"]')).toHaveText('0 by you');
+  await expect(page.locator('[data-change-total="cells"]')).toHaveText('· 0 cells changed');
 });
 
 test('Stage 5 aggregates change impact and keeps filters keyboard accessible', async ({ page }) => {
+  // Given a review with two warnings and both automated and manual changes.
   const fileId = '0123456789abcdef0123456789abcdef';
   const history = [{
     value: 'Bad',
@@ -2378,11 +2335,9 @@ test('Stage 5 aggregates change impact and keeps filters keyboard accessible', a
     timestamp: null,
     review_status: 'needs_attention',
   }];
-  await page.route('**/stage-5/summary', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
+  await page.route('**/stage-5/review', async (route) => {
+    await fulfillReview(route, {
+        history_available: true,
         dataset: {
           filename: 'attention.csv',
           tabular_format: 'csv',
@@ -2449,11 +2404,12 @@ test('Stage 5 aggregates change impact and keeps filters keyboard accessible', a
             column: 'diagnosis', source_column_index: 1, value: 'Worse', original: 'Worse',
           },
         ],
-      }),
     });
   });
 
+  // When the reviewer opens the summary.
   await page.goto(`/stage-5?file_id=${fileId}`);
+  // Then the warning identifies each column and the filters expose the matching changes.
   const warning = page.locator('#conformanceWarningDialog');
   await expect(warning).toBeVisible();
   await expect(warning).toContainText('2 values do not match the permissible value set');
@@ -2468,13 +2424,13 @@ test('Stage 5 aggregates change impact and keeps filters keyboard accessible', a
   await expect(page.getByRole('heading', { level: 1, name: 'attention.csv' })).toBeVisible();
   await expect(page.locator('#datasetMetadata')).toHaveText('gc 11.0.4 · CSV');
   await expect(page.getByRole('button', { name: 'Download data' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 2, name: 'Changes' })).toBeVisible();
-  await expect(page.locator('[data-impact-metric="unique_values"]')).toContainText('3');
-  await expect(page.locator('[data-impact-metric="unique_values"]')).toContainText('Unique values changed');
-  await expect(page.locator('[data-impact-metric="total_values"]')).toContainText('5');
-  await expect(page.locator('[data-impact-metric="total_values"]')).toContainText('Total values changed');
-  await expect(page.locator('[data-impact-metric="manual_values"]')).toContainText('1');
-  await expect(page.locator('[data-impact-metric="manual_values"]')).toContainText('Values manually changed');
+  await expect(page.getByRole('heading', { level: 2, name: 'Changes' })).toHaveCount(0);
+  const changeDetails = page.getByRole('button', { name: /Change details/ });
+  await expect(changeDetails).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('[data-change-total="ai"]')).toHaveText('2 by AI');
+  await expect(page.locator('[data-change-total="you"]')).toHaveText('1 by you');
+  await expect(page.locator('[data-change-total="same"]')).toHaveText('1 unchanged');
+  await expect(page.locator('[data-change-total="cells"]')).toHaveText('· 5 cells changed');
   await expect(page.locator('#mappingTitle')).toHaveText('Value details · Select a row to view history');
   const attention = page.getByRole('button', { name: 'Needs attention' });
   await expect(attention).toHaveAttribute('aria-pressed', 'true');
@@ -2510,6 +2466,391 @@ test('Stage 5 aggregates change impact and keeps filters keyboard accessible', a
   expect(Math.max(returnBox.x + returnBox.width, proceedBox.x + proceedBox.width)).toBeLessThanOrEqual(320);
   await warning.getByRole('button', { name: 'Return to Review' }).click();
   await expect(page).toHaveURL(new RegExp(`/stage-4\\?file_id=${fileId}`));
+});
+
+const _flowColumn = (index, column, ai, you, same) => ({
+  column,
+  column_key: `col_${String(index).padStart(4, '0')}`,
+  source_column_index: index,
+  distinct_terms: ai + you + same,
+  changed_distinct_values: ai + you,
+  total_rows: (ai + you + same) * 3,
+  changed_rows: (ai + you) * 3,
+  reviewer_edited_rows: you * 3,
+  non_conformant_values: 0,
+  review_status: 'clear',
+  ai_changes: ai,
+  manual_changes: you,
+  unchanged: same,
+});
+
+const _FLOW_COLUMNS = [
+  _flowColumn(0, 'primary_diagnosis', 45, 3, 72),
+  _flowColumn(1, 'anatomic_site', 38, 1, 101),
+  _flowColumn(2, 'tissue_type', 15, 7, 73),
+  _flowColumn(3, 'morphology', 18, 1, 156),
+  _flowColumn(4, 'specimen_type', 6, 1, 21),
+  _flowColumn(5, 'treatment_type', 5, 0, 55),
+  _flowColumn(6, 'race', 4, 0, 8),
+  _flowColumn(7, 'ethnicity', 3, 0, 2),
+  _flowColumn(8, 'age_at_diagnosis_unit', 1, 0, 2),
+  _flowColumn(9, 'empty_column', 0, 0, 0),
+];
+const _FLOW_FILE_ID = '0123456789abcdef0123456789abcdef';
+
+const _mockFlowSummary = async (page, columns = _FLOW_COLUMNS) => {
+  await page.route('**/stage-5/review', async (route) => {
+    await fulfillReview(route, {
+        history_available: true,
+        dataset: { filename: 'flow.csv', tabular_format: 'csv', data_model_key: 'gc', external_version_number: '11.0.4' },
+        column_summaries: columns,
+        term_mappings: [],
+        non_conformant_items: [],
+    });
+  });
+};
+
+const _openChangeDetails = async (page) => {
+  const toggle = page.getByRole('button', { name: /Change details/ });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  return toggle;
+};
+
+const _pageBox = (page, selector) => page.evaluate((target) => {
+  const { x, y, width, height } = document.querySelector(target).getBoundingClientRect();
+  return { x: x + window.scrollX, y: y + window.scrollY, width, height };
+}, selector);
+
+/** Page-relative boxes, so a scroll alone never looks like a layout change. */
+const _layoutSnapshot = (page) => page.evaluate(() => {
+  const box = (selector) => {
+    const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect();
+    return { x: x + window.scrollX, y: y + window.scrollY, width, height };
+  };
+  return {
+    header: box('.quality-certificate'),
+    bottomRow: box('[data-flow-column="8"]'),
+    pageWidth: document.documentElement.scrollWidth,
+    pageHeight: document.documentElement.scrollHeight,
+  };
+});
+
+test('Stage 5 change details stay closed until opened and keep the chart out of Tab order when closed', async ({ page }) => {
+  await _mockFlowSummary(page);
+
+  // Given: Stage 5 loads a summary with nine columns that have values and one that has none
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = page.getByRole('button', { name: /Change details/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('[data-change-total="ai"]')).toHaveText('135 by AI');
+  await expect(page.locator('[data-change-total="you"]')).toHaveText('13 by you');
+  await expect(page.locator('[data-change-total="same"]')).toHaveText('490 unchanged');
+  await expect(page.locator('[data-change-total="cells"]')).toHaveText('· 444 cells changed');
+  await expect(page.locator('#changeFlowBody')).toHaveJSProperty('offsetHeight', 0);
+
+  // When: the reviewer opens the change details from the keyboard
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+
+  // Then: the chart lists every column with values, sorted by changed count
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const rows = page.locator('[data-flow-column]');
+  await expect(rows).toHaveCount(9);
+  const rowLabels = await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label').split(':')[0]));
+  expect(rowLabels).toEqual([
+    'primary_diagnosis', 'anatomic_site', 'tissue_type', 'morphology', 'specimen_type',
+    'treatment_type', 'race', 'ethnicity', 'age_at_diagnosis_unit',
+  ]);
+  // Then: the legend takes no focus, so Tab goes straight to the first chart row
+  await page.keyboard.press('Tab');
+  await expect(rows.first()).toBeFocused();
+
+  // When: the reviewer closes the change details and tabs on from the toggle
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.focus();
+  await page.keyboard.press('Tab');
+
+  // Then: focus skips the hidden chart and lands on the first Value details filter
+  await expect(page.getByRole('button', { name: 'Needs attention' })).toBeFocused();
+});
+
+test('Stage 5 change details hover card shows column counts without moving the page', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // Given: the change details are open, fully drawn, and the bottom row is in view
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  await expect(page.getByRole('button', { name: /Change details/ })).toHaveAttribute('aria-expanded', 'false');
+  const closedHeader = await _pageBox(page, '.quality-certificate');
+  await _openChangeDetails(page);
+  const bottomRow = page.locator('[data-flow-column="8"]');
+  // The card hides on scroll, so the bottom row is scrolled into view before the hover,
+  // with the pointer parked off the chart so the scroll cannot slide a row under it.
+  await page.mouse.move(0, 0);
+  await bottomRow.scrollIntoViewIfNeeded();
+  await expect(page.locator('#changeFlowReveal rect')).toHaveAttribute('width', /^\d+(\.\d+)?$/);
+  await expect.poll(() => page.evaluate(() => {
+    const reveal = document.querySelector('#changeFlowReveal rect');
+    return reveal.getAttribute('width') === document.querySelector('.change-flow__svg').viewBox.baseVal.width.toString();
+  })).toBe(true);
+  const card = page.locator('.change-flow-card');
+  await expect(card).not.toHaveClass(/is-shown/);
+  const beforeHover = await _layoutSnapshot(page);
+
+  // When: the reviewer hovers the bottom chart row
+  await bottomRow.hover();
+
+  // Then: the hover card names that column and lists its counts
+  await expect(card).toHaveClass(/is-shown/);
+  await expect(card.locator('h3')).toHaveText('age_at_diagnosis_unit');
+  await expect(card.locator('dt')).toHaveText(['Changed by AI', 'Changed by you', 'Unchanged']);
+  await expect(card.locator('dd')).toHaveText(['1', '0', '2']);
+  await expect(card.locator('p')).toHaveText('33% of 3 unique values changed');
+  // Then: nothing in the card or the chart box scrolls, and the card stays inside the viewport
+  const overflowing = await page.evaluate(() => [
+    ...document.querySelectorAll('.change-flow-card, .change-flow-card *, .change-flow__chart'),
+  ].filter((element) => element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight)
+    .map((element) => element.className.baseVal ?? element.className));
+  expect(overflowing).toEqual([]);
+  const cardBox = await card.boundingBox();
+  expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(720);
+  expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(1280);
+  // Then: the header card, the hovered row, and the page size are unchanged by the hover
+  expect(await _layoutSnapshot(page)).toEqual(beforeHover);
+
+  // When: the reviewer moves away and closes the change details
+  await page.mouse.move(0, 0);
+  await page.getByRole('button', { name: /Change details/ }).click();
+
+  // Then: the header card returns to its closed box and the page width never changed
+  await expect.poll(() => _pageBox(page, '.quality-certificate')).toEqual(closedHeader);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(beforeHover.pageWidth);
+});
+
+test('Stage 5 change details draw every band at once under reduced motion', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+
+  // Given: Stage 5 is loaded with reduced motion and the change details are closed
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = page.getByRole('button', { name: /Change details/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+  // When: the reviewer opens the change details, and the reveal is read in the same task
+  const reveal = await toggle.evaluate((button) => {
+    button.click();
+    return {
+      clipWidth: document.querySelector('#changeFlowReveal rect').getAttribute('width'),
+      chartWidth: String(document.querySelector('.change-flow__svg').viewBox.baseVal.width),
+    };
+  });
+
+  // Then: the bands are not clipped, so nothing waits on an animation that never runs
+  expect(reveal.clipWidth).toBe(reveal.chartWidth);
+  const band = page.locator('.change-flow__band').first();
+  const point = await band.evaluate((path) => {
+    const middle = path.getPointAtLength(path.getTotalLength() * 0.25);
+    const screen = new DOMPoint(middle.x, middle.y + 1).matrixTransform(path.getScreenCTM());
+    return { x: screen.x, y: screen.y };
+  });
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains('change-flow__band'), point)).toBe(true);
+});
+
+test('Stage 5 change details keep a focus card on a row that Tab scrolls into view', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 600 });
+
+  // Given: the change details are open and the bottom row is below the fold
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = await _openChangeDetails(page);
+  const bottomRow = page.locator('[data-flow-column="8"]');
+  const rowTop = await bottomRow.evaluate((row) => row.getBoundingClientRect().top);
+  expect(rowTop).toBeGreaterThan(600);
+
+  // When: the reviewer tabs from the toggle through every row to the bottom one, pointer parked off the chart
+  await page.mouse.move(0, 0);
+  await toggle.focus();
+  for (let press = 0; press < 9; press += 1) await page.keyboard.press('Tab');
+  await expect(bottomRow).toBeFocused();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+  // Then: the page scrolled, and the card stays shown beside the focused row
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const card = page.locator('.change-flow-card');
+  await expect(card).toHaveClass(/is-shown/);
+  await expect(card.locator('h3')).toHaveText('age_at_diagnosis_unit');
+  await expect(card).toHaveCSS('transform', 'none');
+  const rowBox = await bottomRow.boundingBox();
+  const cardBox = await card.boundingBox();
+  // The card sits at the row's top unless that would push it past the viewport bottom.
+  const expectedTop = Math.max(8, Math.min(rowBox.y, 600 - cardBox.height - 8));
+  expect(Math.abs(cardBox.y - expectedTop)).toBeLessThanOrEqual(1);
+});
+
+test('Stage 5 change details keep keyboard focus and its card when a resize redraws the chart', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Given: the first chart row has keyboard focus and shows its card
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = await _openChangeDetails(page);
+  await page.mouse.move(0, 0);
+  await toggle.focus();
+  await page.keyboard.press('Tab');
+  const firstRow = page.locator('[data-flow-column="0"]');
+  await expect(firstRow).toBeFocused();
+  const card = page.locator('.change-flow-card');
+  await expect(card).toHaveClass(/is-shown/);
+  const chartWidth = () => page.locator('.change-flow__svg').evaluate((svg) => svg.viewBox.baseVal.width);
+  const wideWidth = await chartWidth();
+  const scrollBefore = await page.evaluate(() => window.scrollY);
+
+  // When: the window narrows and the chart redraws at the new width
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await expect.poll(chartWidth).toBeLessThan(wideWidth);
+
+  // Then: the same row still has focus, the refocus did not scroll the page, and its card is shown again
+  await expect(firstRow).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+  await expect(card).toHaveClass(/is-shown/);
+  await expect(card.locator('h3')).toHaveText('primary_diagnosis');
+});
+
+test('Stage 5 change details hide the card after a mouse click on a row once the pointer leaves', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Given: the chart is open and a mouse click on the first row has focused it without a focus ring
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  await _openChangeDetails(page);
+  const firstRow = page.locator('[data-flow-column="0"]');
+  await firstRow.click();
+  await expect(firstRow).toBeFocused();
+  expect(await firstRow.evaluate((row) => row.matches(':focus-visible'))).toBe(false);
+  const card = page.locator('.change-flow-card');
+  await expect(card).toHaveClass(/is-shown/);
+
+  // When: the mouse moves off the chart
+  await page.mouse.move(0, 0);
+
+  // Then: no card stays behind for the mouse-focused row
+  await expect(card).not.toHaveClass(/is-shown/);
+});
+
+test('Stage 5 change details keep the hover card when a click moves focus to another row', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Given: the chart is open and a mouse click has focused the first row
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  await _openChangeDetails(page);
+  await page.locator('[data-flow-column="0"]').click();
+  await expect(page.locator('[data-flow-column="0"]')).toBeFocused();
+
+  // When: the reviewer clicks the second row, which blurs the first
+  const secondRow = page.locator('[data-flow-column="1"]');
+  await secondRow.click();
+  await expect(secondRow).toBeFocused();
+
+  // Then: the hover card stays shown for the second row under the pointer
+  const card = page.locator('.change-flow-card');
+  await expect(card).toHaveClass(/is-shown/);
+  await expect(card.locator('h3')).toHaveText('anatomic_site');
+});
+
+test('Stage 5 change details continue the draw-in when a resize redraws mid-reveal', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // A fake clock makes the reveal progress depend only on the time this test advances.
+  await page.clock.install();
+  const reveal = () => page.evaluate(() => ({
+    clip: Number(document.querySelector('#changeFlowReveal rect').getAttribute('width')),
+    leftX: Number(document.querySelector('#changeFlowNode0 rect').getAttribute('x')),
+    width: document.querySelector('.change-flow__svg').viewBox.baseVal.width,
+  }));
+
+  // Given: the chart was opened and 270 ms have passed: 150 ms of the 850 ms draw-in after its
+  // 120 ms delay, which is about 18% of the time and, with the ease-out, about 44% of the distance
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = page.getByRole('button', { name: /Change details/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  const atOpen = await reveal();
+  expect(atOpen.clip).toBe(atOpen.leftX);
+  await page.clock.runFor(270);
+
+  // When: the window narrows and the debounced redraw runs
+  await page.setViewportSize({ width: 1100, height: 900 });
+  // Each poll advances the fake clock 100 ms, and the resize observer debounces 80 ms, so the first
+  // poll normally redraws. expect.poll backs off (100/250/500/1000 ms), giving about 8 tries in 5 s,
+  // but the real limit is tighter: the redraw must land within about 7 polls, before fake time
+  // reaches about 970 ms, or the reveal has already finished and the mid-reveal check is meaningless.
+  await expect.poll(async () => {
+    await page.clock.runFor(100);
+    return (await reveal()).width;
+  }).toBeLessThan(atOpen.width);
+
+  // Then: the redrawn clip sits between the left nodes and the full width, not snapped to either
+  const afterRedraw = await reveal();
+  expect(afterRedraw.clip).toBeGreaterThan(afterRedraw.leftX);
+  expect(afterRedraw.clip).toBeLessThan(afterRedraw.width);
+  // Then: it keeps growing and ends at exactly the full width
+  await page.clock.runFor(1000);
+  const finished = await reveal();
+  expect(finished.clip).toBe(finished.width);
+});
+
+test('Stage 5 change details show column names as text, never as markup', async ({ page }) => {
+  const hostileName = '<img src=x onerror=window.__x=1>';
+  await _mockFlowSummary(page, [_flowColumn(0, hostileName, 2, 1, 3)]);
+
+  // Given: a summary whose only column name is an HTML payload
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  await expect(page.locator('[data-change-total="ai"]')).toHaveText('2 by AI');
+
+  // When: the reviewer opens the chart and hovers that column
+  await _openChangeDetails(page);
+  const row = page.locator('[data-flow-column="0"]');
+  await row.hover();
+
+  // Then: the name appears literally in the row label and card, and no image or script ran
+  await expect(row).toHaveAttribute('aria-label', `${hostileName}: 3 of 6 unique values changed, 2 by AI, 1 by you`);
+  const card = page.locator('.change-flow-card');
+  await expect(card.locator('h3')).toHaveText(hostileName);
+  await expect(card.locator('img')).toHaveCount(0);
+  await expect(page.locator('#changeFlow img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__x)).toBeUndefined();
+});
+
+test('Stage 5 change details scroll sideways only inside the chart on a phone', async ({ page }) => {
+  await _mockFlowSummary(page);
+  await page.setViewportSize({ width: 400, height: 800 });
+
+  // Given: the header card fits the phone viewport with the change details closed
+  await page.goto(`/stage-5?file_id=${_FLOW_FILE_ID}`);
+  const toggle = page.getByRole('button', { name: /Change details/ });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const header = page.locator('.quality-certificate');
+  const headerWidth = await header.evaluate((element) => element.getBoundingClientRect().width);
+  // The shared step-instruction tooltip already overhangs a 400px page (html hides it), so the
+  // proof is that opening adds nothing to the page width, not that the width equals the viewport.
+  const closedPageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+
+  // When: the reviewer opens the change details
+  await toggle.click();
+  await expect(page.locator('[data-flow-column]')).toHaveCount(9);
+
+  // Then: the header card keeps its width, the page does not widen, and only the chart box scrolls, sideways
+  expect(await header.evaluate((element) => element.getBoundingClientRect().width)).toBe(headerWidth);
+  expect(await header.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(closedPageWidth);
+  const chart = await page.locator('.change-flow__chart').evaluate((element) => ({
+    scrollsSideways: element.scrollWidth > element.clientWidth,
+    scrollsDown: element.scrollHeight > element.clientHeight,
+  }));
+  expect(chart).toEqual({ scrollsSideways: true, scrollsDown: false });
 });
 
 test('autosave persists overrides and review settings across reloads', async ({ page }) => {
@@ -2630,7 +2971,7 @@ test('stage 5 advance waits for the latest override save', async ({ page }) => {
     legacyConformanceRequests += 1;
     await route.continue();
   });
-  await page.route('**/stage-5/summary', async (route) => {
+  await page.route('**/stage-5/review', async (route) => {
     summaryRequests += 1;
     await route.continue();
   });
@@ -2855,6 +3196,10 @@ test('Stage 1 shows upload progress and keeps the Map button disabled until uplo
       body: JSON.stringify({
         file_id: 'abcdef0123456789abcdef0123456789',
         file_name: 'basic.csv',
+        verification: {
+          sha256: createHash('sha256').update(fs.readFileSync(fileFixture('basic.csv'))).digest('hex'),
+          size_bytes: fs.readFileSync(fileFixture('basic.csv')).length,
+        },
         human_size: '24 B',
         content_type: 'text/csv',
         uploaded_at: '2026-05-20T18:00:00Z',
@@ -2979,7 +3324,7 @@ test('Stage 4 keeps the workflow id when Review is clicked before rows load', as
   await expect(reviewLink).toHaveAttribute('href', `/stage-5?file_id=${fileId}`);
 
   // When: the user clicks Review before the Stage 4 rows request completes
-  const summaryRequestPromise = page.waitForRequest('**/stage-5/summary');
+  const summaryRequestPromise = page.waitForRequest('**/stage-5/review');
   await reviewLink.click();
   const summaryRequest = await summaryRequestPromise;
   releaseRows();
@@ -2990,7 +3335,7 @@ test('Stage 4 keeps the workflow id when Review is clicked before rows load', as
   expect(stageFiveUrl.searchParams.get('file_id')).toBe(fileId);
   expect(summaryRequest.postDataJSON()).toEqual({ file_id: fileId });
   await expect(page.locator('#certificateTitle')).toHaveText('basic.csv');
-  await expect(page.locator('#summaryGrid .change-impact')).toBeVisible();
+  await expect(page.locator('.change-flow__summary')).toBeVisible();
 });
 
 test('Stage 2 locks and Stage 5 is reachable after Stage 3 completes', async ({ page }) => {
@@ -3003,10 +3348,11 @@ test('Stage 2 locks and Stage 5 is reachable after Stage 3 completes', async ({ 
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        job_id: 'e2e-job-locked',
+        job_id: `e2e-job-${fileId}`,
+        plan_version: payload.plan_version,
         status: 'succeeded',
         detail: 'Harmonization completed.',
-        next_stage_url: `/stage-4?file_id=${fileId}&job_id=e2e-job-locked&status=succeeded`,
+        next_stage_url: `/stage-4?file_id=${fileId}&job_id=e2e-job-${fileId}&status=succeeded`,
         job_id_available: true,
         manifest_summary: null,
       }),
@@ -3030,11 +3376,12 @@ test('Stage 2 locks and Stage 5 is reachable after Stage 3 completes', async ({ 
   await page.waitForURL(/\/stage-5/);
   const stageFiveUrl = new URL(page.url());
   expect(stageFiveUrl.searchParams.get('file_id')).toBe(fileId);
-  await page.locator('#summaryGrid').waitFor({ state: 'visible' });
+  await page.locator('.change-flow__summary').waitFor({ state: 'visible' });
 
-  // And: Stage 5 can load from the durable workflow id in the URL alone
+  // And the saved link reloads the same job.
+  expect(stageFiveUrl.searchParams.get('job_id')).toBe(`e2e-job-${fileId}`);
   await page.reload();
-  await expect(page.locator('#summaryGrid')).not.toContainText('Unable to locate harmonization context.');
+  await expect(page.locator('.change-flow__summary')).toBeVisible();
 
   // When: the user goes back to Stage 2
   await page.click('.progress-track .step[data-stage="mapping"]');
@@ -3109,6 +3456,10 @@ test('Stage 3 resumes a durable job and retries with only the workflow id', asyn
   // Then: the retry needs only the workflow id; model and mapping choices stay server-owned.
   await expect(page.locator('#reviewButton')).toBeEnabled();
   expect(harmonizePayload).toEqual({ file_id: currentFileId });
+  const verify = page.locator('.progress-tracker [data-stage="verify"] a');
+  await expect(verify).toHaveAttribute('href', `/stage-4?file_id=${currentFileId}&job_id=retry-job`);
+  await verify.click();
+  await expect(page).toHaveURL(new RegExp('job_id=retry-job'));
 });
 
 test('column tabs keep each source column and transformation separate', async ({ page }) => {
@@ -3200,9 +3551,10 @@ test('history dialog separates current output from accessible decision history',
   await clickHarmonize(page);
   await expect(page.locator('#reviewButton')).toBeEnabled();
   seedHarmonization(fileId, { 0: { col_0001: 'Changed Value' } });
-  await page.route('**/stage-5/summary', async (route) => {
+  await page.route('**/stage-5/review', async (route) => {
     const response = await route.fetch();
-    const summary = await response.json();
+    const parts = await reviewParts(response);
+    const summary = JSON.parse(parts.get('summary'));
     for (const mapping of summary.term_mappings) {
       mapping.history.push({
         value: mapping.final_value,
@@ -3212,7 +3564,7 @@ test('history dialog separates current output from accessible decision history',
         review_status: 'not_checked',
       });
     }
-    await route.fulfill({ response, json: summary });
+    await fulfillReview(route, summary, parts.get('download'));
   });
 
   // Navigate to Stage 5

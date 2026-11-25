@@ -9,6 +9,7 @@ import {
   isValidFileId,
   readFromSession,
 } from './storage-keys.js';
+import { readFileSession, selectedSheetShape } from './file-session.js';
 
 /**
  * Update progress tracker UI to reflect the active stage.
@@ -44,7 +45,7 @@ export function setActiveStage(stage) {
         link.removeAttribute('href');
         link.setAttribute('tabindex', '-1');
       } else {
-        link.setAttribute('href', link.dataset.url);
+        link.setAttribute('href', buildNavUrl(link.dataset.url));
         link.removeAttribute('tabindex');
       }
     }
@@ -78,12 +79,29 @@ function _getFileIdForNavigation() {
 }
 
 /* why: append file_id to navigation URLs so stages can access the active session. */
-function _buildNavUrl(baseUrl) {
+export function buildNavUrl(baseUrl) {
   const fileId = _getFileIdForNavigation();
   const url = new URL(baseUrl, window.location.origin);
+  url.searchParams.delete('file_id');
+  url.searchParams.delete('job_id');
   if (fileId) url.searchParams.set('file_id', fileId);
+
+  const pageParams = new URLSearchParams(window.location.search);
+  const jobId = pageParams.get('job_id');
+  if (fileId && pageParams.get('file_id') === fileId && jobId && ['/stage-4', '/stage-5'].includes(url.pathname)) {
+    url.searchParams.set('job_id', jobId);
+  }
   _addMappingContext(url);
   return url.pathname + url.search;
+}
+
+/** Keep this page and its tracker links on the job the server returned. */
+export function bindJobToPage(jobId, stage) {
+  if (!jobId) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set('job_id', jobId);
+  window.history.replaceState(window.history.state, '', url);
+  setActiveStage(stage);
 }
 
 function _addMappingContext(url) {
@@ -110,18 +128,20 @@ function _getTargetContextForNavigation() {
  * The real links supply native keyboard navigation.
  * Unreachable stages are blocked from navigation.
  */
-export function initNavigationEvents() {
+export function initNavigationEvents(stageActions = {}) {
   document.querySelectorAll('.progress-tracker .step-link').forEach((link) => {
     link.addEventListener('click', (event) => {
       const step = link.closest('.step');
-      if (!step || step.classList.contains('unreachable')) {
+      if (!step || step.classList.contains('unreachable') || link.getAttribute('aria-disabled') === 'true') {
         event.preventDefault();
         return;
       }
       const url = link.dataset.url;
       if (isSafeRelativeUrl(url)) {
         event.preventDefault();
-        window.location.href = _buildNavUrl(url);
+        const action = stageActions[step.dataset.stage];
+        if (action) void action(buildNavUrl(url));
+        else window.location.href = buildNavUrl(url);
       } else {
         event.preventDefault();
       }
@@ -161,6 +181,53 @@ function _isStageOneUrl(url) {
 export function initStepInstruction(activeStage) {
   _populateInstructionBanner(activeStage);
   _populateStepTooltips();
+  renderFileContext();
+}
+
+/**
+ * Name the uploaded file under the step instruction, with a details card on hover or focus.
+ * The line stays hidden unless the stored file is the workflow this page shows.
+ */
+export function renderFileContext() {
+  const container = document.getElementById('stepInstructionFile');
+  if (!container) return;
+  const session = readFileSession();
+  const isCurrentFile = Boolean(session?.original_name) && session.file_id === _getFileIdForNavigation();
+  container.hidden = !isCurrentFile;
+  if (!isCurrentFile) return;
+
+  container.querySelector('.step-instruction-file-name').textContent = session.original_name;
+  container.querySelector('.step-instruction-file-card-name').textContent = session.original_name;
+  const facts = _fileFacts(session).flatMap(({ label, value }) => {
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    return [term, detail];
+  });
+  container.querySelector('.step-instruction-file-facts').replaceChildren(...facts);
+}
+
+/* why: older or partial session records omit facts that are unknown instead of showing placeholders. */
+function _fileFacts(session) {
+  const sheet = _isStageOneUrl(window.location.href) ? session.selected_sheet : session.dataset_shape?.sheet_name;
+  const shape = selectedSheetShape(session, sheet);
+  const sizeAndType = [session.human_size, session.tabular_format?.toUpperCase()].filter(Boolean).join(' · ');
+  const isWorkbook = Array.isArray(session.sheet_names) && session.sheet_names.length > 0;
+  const facts = [
+    { label: 'Rows', value: shape?.rows.toLocaleString('en-US') },
+    { label: 'Columns', value: shape?.columns.toLocaleString('en-US') },
+    { label: 'Size', value: sizeAndType },
+    { label: 'Uploaded', value: _formatUploadTime(session.uploaded_at) },
+    { label: 'Sheet', value: isWorkbook ? sheet : null },
+  ];
+  return facts.filter((fact) => fact.value);
+}
+
+function _formatUploadTime(isoTime) {
+  const time = new Date(isoTime ?? '');
+  if (Number.isNaN(time.getTime())) return null;
+  return time.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 /**

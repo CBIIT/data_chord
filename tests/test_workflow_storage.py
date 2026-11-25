@@ -23,6 +23,7 @@ from src.storage import (
     WorkflowFile,
     WorkflowJsonUnreadableError,
     WorkflowNotFoundError,
+    WorkflowStorageError,
 )
 from src.storage.workflow_storage import JsonValue
 
@@ -101,6 +102,46 @@ def test_local_workflow_delete_removes_owned_workflow(tmp_path: Path) -> None:
             workflow.dataset_workflow_id,
             WorkflowFile.WORKFLOW_STATE,
         )
+
+
+@pytest.mark.parametrize(
+    "untrusted_id",
+    [
+        "../outside",
+        "/tmp/outside",
+        "a" * 31 + "/",
+        "A" * 32,
+        "a" * 33,
+    ],
+)
+def test_local_workflow_storage_rejects_untrusted_ids_before_path_access(
+    tmp_path: Path,
+    untrusted_id: str,
+) -> None:
+    # Given: a caller-controlled workflow id and a file outside storage.
+    storage = LocalWorkflowStorage(tmp_path / "storage")
+    user = UserContext(user_id="alice")
+    outside = tmp_path / "outside"
+    outside.write_text("untouched", encoding="utf-8")
+
+    # When / Then: the invalid id is rejected before any filesystem access.
+    with pytest.raises(ValueError, match="Invalid dataset workflow id"):
+        storage.read_json(user, untrusted_id, WorkflowFile.WORKFLOW_STATE)
+    assert outside.read_text(encoding="utf-8") == "untouched"
+
+
+def test_local_workflow_storage_rejects_workflow_symlink_outside_root(tmp_path: Path) -> None:
+    # Given: a valid workflow-id entry that is a symlink outside the storage root.
+    storage = LocalWorkflowStorage(tmp_path / "storage")
+    user = UserContext(user_id="alice")
+    workflow_id = dataset_workflow_id()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "storage" / "workflows" / workflow_id).symlink_to(outside, target_is_directory=True)
+
+    # When / Then: real-path containment rejects the escaped directory.
+    with pytest.raises(WorkflowStorageError, match="Invalid workflow id"):
+        storage.read_json(user, workflow_id, WorkflowFile.WORKFLOW_STATE)
 
 
 def test_admin_can_read_another_users_workflow(tmp_path: Path) -> None:

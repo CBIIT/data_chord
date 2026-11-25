@@ -1,7 +1,9 @@
-import { initStepInstruction, setActiveStage, initNavigationEvents, advanceMaxReachedStage } from '/assets/shared/step-instruction-ui.js';
-import { STAGE_2_PAYLOAD_KEY, STAGE_3_JOB_KEY, CURRENT_FILE_SESSION_KEY, removeFromSession, writeToSession, readFromSession } from '/assets/shared/storage-keys.js';
+import { initStepInstruction, setActiveStage, initNavigationEvents, advanceMaxReachedStage, resetMaxReachedStage, renderFileContext } from '/assets/shared/step-instruction-ui.js';
+import { readFileSession, updateFileSession, selectedSheetShape, formatCount } from '/assets/shared/file-session.js';
+import { STAGE_2_PAYLOAD_KEY, STAGE_3_JOB_KEY, CURRENT_FILE_SESSION_KEY, removeFromSession, writeToSession, readFromSession, isValidFileId } from '/assets/shared/storage-keys.js';
 import { reportApiError, reportFetchFailure } from '/assets/shared/client-events.js';
 import { showDataModelPopup, preloadDataModels } from './data_model_popup.js';
+import { fingerprintFile, verificationMatches, UploadVerificationError, UPLOAD_INTEGRITY_MESSAGE } from './upload-integrity.js';
 
 const config = window.stageOneUploadConfig ?? {};
 const isDemo = Boolean(config.demoUpload);
@@ -13,6 +15,7 @@ const statusMessage = document.getElementById('statusMessage');
 const dropzoneCopy = document.getElementById('dropzoneCopy');
 const dropzoneUploading = document.getElementById('dropzoneUploading');
 const uploadingFileName = document.getElementById('uploadingFileName');
+const uploadingTitle = document.getElementById('uploadingTitle');
 const dropzoneFile = document.getElementById('dropzoneFile');
 const dropzoneFileName = document.getElementById('dropzoneFileName');
 const dropzoneFileSize = document.getElementById('dropzoneFileSize');
@@ -102,21 +105,34 @@ const _showDropzoneUploading = (file) => {
   }
 };
 
-const _showDropzoneSummary = (file, statusText) => {
+const _showDropzoneSummary = (file, statusText, tone = 'success') => {
   if (dropzoneCopy) dropzoneCopy.classList.add('hidden');
   if (dropzoneUploading) {
     dropzoneUploading.classList.add('hidden');
     dropzoneUploading.setAttribute('aria-hidden', 'true');
   }
-  if (dropzoneFile) dropzoneFile.classList.remove('hidden');
+  if (dropzoneFile) {
+    dropzoneFile.classList.remove('hidden');
+    dropzoneFile.classList.toggle('is-error', tone === 'error');
+  }
   if (dropzoneFileName) {
     dropzoneFileName.textContent = file.name;
     dropzoneFileName.title = file.name;
     dropzoneFileName.classList.toggle('file-name--long', file.name.length > LONG_NAME_THRESHOLD);
   }
-  /* Hydrated files have humanSize (pre-formatted); real Files have size (bytes). */
-  if (dropzoneFileSize) dropzoneFileSize.textContent = file.humanSize ?? _formatBytes(file.size);
+  _renderFileSize(file);
   if (dropzoneFileStatus) dropzoneFileStatus.textContent = statusText;
+};
+
+/* Rows and columns appear once Analyze has counted the selected sheet. */
+const _renderFileSize = (file) => {
+  if (!dropzoneFileSize || !file) return;
+  /* Hydrated files have humanSize (pre-formatted); real Files have size (bytes). */
+  const size = file.humanSize ?? _formatBytes(file.size);
+  const shape = state.uploaded ? selectedSheetShape(readFileSession()) : null;
+  dropzoneFileSize.textContent = shape
+    ? `${size} · ${formatCount(shape.rows, 'row')} · ${formatCount(shape.columns, 'column')}`
+    : size;
 };
 
 const _setFileInputDisabled = (disabled) => {
@@ -173,13 +189,15 @@ const _handleFileSelection = (file) => {
     if (fileInput) fileInput.value = '';
     return;
   }
+  _clearStaleSessionData();
+  resetMaxReachedStage();
+  _replaceUploadWorkflowUrl(null);
+  _resetUploadState();
   const issues = _validateFile(file);
   if (issues.length) {
-    _showDropzoneCopy();
     _setStatus(issues.join(' '), 'error');
     return;
   }
-  _clearStaleSessionData();
   state.file = file;
   state.uploaded = null;
   _showDropzoneSummary(file, 'Ready to upload');
@@ -192,18 +210,28 @@ const _uploadDataset = async () => {
     return;
   }
   state.isUploading = true;
+  const file = state.file;
   _setFileInputDisabled(true);
   _setAnalyzeButtonEnabled(false);
+  document.querySelectorAll('.progress-tracker .step-link').forEach((link) => {
+    link.setAttribute('aria-disabled', 'true');
+    link.setAttribute('tabindex', '-1');
+    link.removeAttribute('href');
+  });
   if (dropzone) {
     dropzone.classList.add('is-uploading');
     dropzone.setAttribute('aria-busy', 'true');
   }
-  _showDropzoneUploading(state.file);
-
-  const formData = new FormData();
-  formData.append('file', state.file);
+  _showDropzoneUploading(file);
+  if (uploadingTitle) uploadingTitle.textContent = 'Preparing upload…';
 
   try {
+    const expected = await fingerprintFile(file);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('expected_sha256', expected.sha256);
+    formData.append('expected_size_bytes', String(expected.size_bytes));
+    if (uploadingTitle) uploadingTitle.textContent = 'Please wait while your file is uploaded';
     let response;
     try {
       response = await fetch(config.uploadEndpoint, {
@@ -228,23 +256,34 @@ const _uploadDataset = async () => {
         statusCode: response.status,
         serverRequestId: _responseRequestId(response),
       });
+      if (response.status === 400 && payload.detail === UPLOAD_INTEGRITY_MESSAGE) {
+        throw new UploadVerificationError(UPLOAD_INTEGRITY_MESSAGE);
+      }
       throw new Error(UPLOAD_API_ERROR_MESSAGE);
+    }
+    if (!verificationMatches(payload.verification, expected)) {
+      throw new UploadVerificationError(UPLOAD_INTEGRITY_MESSAGE);
     }
     state.uploaded = payload;
     state.sheetNames = Array.isArray(payload.sheet_names) ? payload.sheet_names : [];
     state.sheetPreviews = _sheetPreviewsFromPayload(payload);
     state.selectedSheet = payload.selected_sheet ?? state.sheetNames[0] ?? null;
-    _persistFileSession(payload, state.file.name);
+    _persistFileSession(payload, file.name);
+    _replaceUploadWorkflowUrl(payload.file_id);
     if (dropzone) dropzone.classList.add('has-file');
-    _showDropzoneSummary(state.file, 'Uploaded');
+    _showDropzoneSummary(file, 'Uploaded');
     _renderSheetSelector();
     _setAnalyzeButtonEnabled(true);
   } catch (error) {
     console.error(error);
-    _showDropzoneSummary(state.file, 'Upload failed');
-    _setStatus(UPLOAD_API_ERROR_MESSAGE, 'error');
+    state.uploaded = null;
+    removeFromSession(CURRENT_FILE_SESSION_KEY);
+    renderFileContext();
+    _showDropzoneSummary(file, 'Upload failed', 'error');
+    _setStatus(error instanceof UploadVerificationError ? error.message : UPLOAD_API_ERROR_MESSAGE, 'error');
   } finally {
     state.isUploading = false;
+    setActiveStage('upload');
     _setFileInputDisabled(false);
     if (dropzone) {
       dropzone.classList.remove('is-uploading');
@@ -257,6 +296,17 @@ const _clearStaleSessionData = () => {
   removeFromSession(STAGE_2_PAYLOAD_KEY);
   removeFromSession(STAGE_3_JOB_KEY);
   removeFromSession(CURRENT_FILE_SESSION_KEY);
+  renderFileContext();
+};
+
+/* A replacement owns this history entry; earlier explicit workflow links keep theirs. */
+const _replaceUploadWorkflowUrl = (fileId) => {
+  const url = new URL(window.location.href);
+  for (const key of ['file_id', 'data_model_key', 'external_version_number', 'job_id', 'status', 'detail']) {
+    url.searchParams.delete(key);
+  }
+  if (fileId) url.searchParams.set('file_id', fileId);
+  window.history.replaceState(window.history.state, '', url);
 };
 
 /* Enables navigation back to Stage 1 with file context. */
@@ -264,18 +314,24 @@ const _persistFileSession = (uploadResponse, fileName) => {
   writeToSession(CURRENT_FILE_SESSION_KEY, {
     file_id: uploadResponse.file_id,
     original_name: fileName,
-    uploaded_at: new Date().toISOString(),
+    uploaded_at: uploadResponse.uploaded_at ?? new Date().toISOString(),
     human_size: uploadResponse.human_size,
+    tabular_format: uploadResponse.tabular_format ?? null,
     sheet_names: uploadResponse.sheet_names ?? [],
     sheet_previews: uploadResponse.sheet_previews ?? {},
     selected_sheet: uploadResponse.selected_sheet ?? null,
   });
+  renderFileContext();
 };
 
 /* Restores file display from session when returning to Stage 1. */
 const _hydrateFromSession = () => {
   const session = readFromSession(CURRENT_FILE_SESSION_KEY);
-  if (!session || !session.file_id || !session.original_name) {
+  if (!session || !isValidFileId(session.file_id) || !session.original_name) {
+    return false;
+  }
+  const requestedIds = new URLSearchParams(window.location.search).getAll('file_id');
+  if (requestedIds.length > 0 && (requestedIds.length !== 1 || requestedIds[0] !== session.file_id)) {
     return false;
   }
 
@@ -470,7 +526,7 @@ const _buildSheetPreviewTable = (preview) => {
 };
 
 const _selectSheet = (sheetName, { focus = false } = {}) => {
-  if (!state.sheetNames.includes(sheetName)) return;
+  if (state.isAnalyzing || !state.sheetNames.includes(sheetName)) return;
   if (state.selectedSheet === sheetName) {
     if (focus) _focusActiveTab();
     return;
@@ -492,16 +548,12 @@ const _selectSheet = (sheetName, { focus = false } = {}) => {
   if (sheetSelect) sheetSelect.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
+/* why: update in place so the upload time and Analyze counts survive a sheet change. */
 const _persistSelectedSheet = () => {
   if (!state.uploaded || !state.file) return;
-  _persistFileSession(
-    {
-      ...state.uploaded,
-      sheet_names: state.sheetNames,
-      selected_sheet: state.selectedSheet,
-    },
-    state.file.name,
-  );
+  updateFileSession({ selected_sheet: state.selectedSheet });
+  renderFileContext();
+  _renderFileSize(state.file);
 };
 
 const _updateSheetSubtitle = () => {
@@ -609,6 +661,7 @@ const _analyzeDataset = async () => {
     _setFileInputDisabled(false);
     return;
   }
+  const submittedSheet = state.selectedSheet;
   state.isAnalyzing = true;
   _setFileInputDisabled(true);
   _setAnalyzeButtonEnabled(false);
@@ -627,7 +680,7 @@ const _analyzeDataset = async () => {
           file_id: state.uploaded.file_id,
           data_model_key: selection.dataModelKey,
           external_version_number: selection.externalVersionNumber,
-          sheet_name: state.selectedSheet,
+          sheet_name: submittedSheet,
         }),
       });
     } catch (error) {
@@ -652,6 +705,13 @@ const _analyzeDataset = async () => {
       });
       throw new Error(ANALYZE_API_ERROR_MESSAGE);
     }
+    updateFileSession({
+      dataset_shape: {
+        sheet_name: submittedSheet,
+        rows: payload.total_rows,
+        columns: Array.isArray(payload.columns) ? payload.columns.length : null,
+      },
+    });
     // Keep overlay visible during navigation - browser will replace the page
     _navigateToStageTwo(
       state.uploaded.file_id,
@@ -768,6 +828,10 @@ const _init = () => {
      same selection path that updates tabs, indicator, and session storage. */
   if (sheetSelect) {
     sheetSelect.addEventListener('change', (event) => {
+      if (state.isAnalyzing) {
+        sheetSelect.value = state.selectedSheet ?? '';
+        return;
+      }
       if (!event.isTrusted && sheetSelect.value === state.selectedSheet) return;
       if (sheetSelect.value && sheetSelect.value !== state.selectedSheet) {
         _selectSheet(sheetSelect.value);

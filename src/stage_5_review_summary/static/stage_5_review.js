@@ -1,6 +1,8 @@
 /** Stage 5 presents the current downloadable output and its separate decision history. */
 
 import {
+  bindJobToPage,
+  buildNavUrl,
   initStepInstruction,
   setActiveStage,
   initNavigationEvents,
@@ -11,15 +13,16 @@ import {
   isReviewStateRecovery,
   readResponseDetail,
   renderRecoveryError,
+  renderErrorLink,
 } from '/assets/shared/recovery-error.js';
 import {
   clearWorkflowSession,
   isValidFileId,
   isSafeFilename,
 } from '/assets/shared/storage-keys.js';
+import { mountChangeFlow } from './stage_5_change_flow.js';
 
-const _DEFAULT_SUMMARY_ENDPOINT = '/stage-5/summary';
-const _DEFAULT_DOWNLOAD_ENDPOINT = '/stage-5/download';
+const _DEFAULT_SUMMARY_ENDPOINT = '/stage-5/review';
 const _DEFAULT_STAGE_FOUR_URL = '/stage-4';
 const _DEFAULT_ZIP_FILENAME = 'harmonized_data.zip';
 const _REVOKE_DELAY_MS = 100;
@@ -28,15 +31,13 @@ const _SORT_KEYS = new Set(['column', 'original_value', 'final_value']);
 
 const _config = window.stageFiveConfig ?? {};
 const _summaryEndpoint = _config.summaryEndpoint ?? _DEFAULT_SUMMARY_ENDPOINT;
-const _downloadEndpoint = _config.downloadEndpoint ?? _DEFAULT_DOWNLOAD_ENDPOINT;
 const _stageFourUrl = _config.stageFourUrl ?? _DEFAULT_STAGE_FOUR_URL;
 
 const _downloadBtn = document.getElementById('downloadResults');
 const _downloadError = document.getElementById('downloadError');
 const _certificateTitle = document.getElementById('certificateTitle');
 const _datasetMetadata = document.getElementById('datasetMetadata');
-const _certificateStatus = document.getElementById('certificateStatus');
-const _summaryGrid = document.getElementById('summaryGrid');
+const _changeFlow = document.getElementById('changeFlow');
 const _startOverAction = document.getElementById('uploadNavAction');
 const _startOverButton = document.getElementById('startOverButton');
 const _startOverDialog = document.getElementById('startOverDialog');
@@ -54,10 +55,10 @@ const _conformanceProceedButton = document.getElementById('conformanceProceedBut
 
 const _state = {
   fileId: null,
+  download: null,
   termMappings: [],
   sortColumn: null,
   sortDirection: 'asc',
-  nonConformantCount: 0,
   filter: 'changed',
 };
 
@@ -80,13 +81,6 @@ const _extractFilename = (disposition) => {
     filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? null;
   }
   return filename && isSafeFilename(filename) ? filename : _DEFAULT_ZIP_FILENAME;
-};
-
-const _setDownloadButtonState = (isLoading) => {
-  if (!_downloadBtn) return;
-  _downloadBtn.disabled = isLoading;
-  const textTarget = _downloadBtn.querySelector('.btn-3d-front') ?? _downloadBtn;
-  textTarget.textContent = isLoading ? 'Preparing download...' : 'Download data';
 };
 
 const _triggerBrowserDownload = (blob, filename) => {
@@ -113,8 +107,9 @@ const _hideError = () => {
 };
 
 const _loadSourceContext = () => {
-  const fileId = new URLSearchParams(window.location.search).get('file_id');
-  return isValidFileId(fileId) ? { fileId } : null;
+  const params = new URLSearchParams(window.location.search);
+  const fileId = params.get('file_id');
+  return isValidFileId(fileId) ? { fileId, jobId: params.get('job_id') } : null;
 };
 
 const _showStartOverAction = () => {
@@ -168,7 +163,7 @@ const _validConformanceItems = (items) => (
 
 const _returnToReview = () => {
   if (!_state.fileId || !isSafeRelativeUrl(_stageFourUrl)) return;
-  window.location.assign(`${_stageFourUrl}?file_id=${encodeURIComponent(_state.fileId)}`);
+  window.location.assign(buildNavUrl(_stageFourUrl));
 };
 
 const _showConformanceWarning = (items) => {
@@ -223,40 +218,17 @@ const _showConformanceWarning = (items) => {
 };
 
 const _handleDownload = async () => {
-  if (!_state.fileId) {
-    _showError('Unable to locate this file. Restart the harmonization workflow.');
-    return;
-  }
-
+  if (!_state.download) return;
   _hideError();
-  _setDownloadButtonState(true);
   markTiming('stage5.download.start');
   try {
-    const response = await fetch(_downloadEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: _state.fileId }),
-    });
-    markTiming('stage5.download.response', { status: response.status });
-    measureTiming('stage5.download.request', 'stage5.download.start', 'stage5.download.response');
-    if (!response.ok) {
-      const detail = await readResponseDetail(response, 'Download failed. Try again.');
-      throw Object.assign(new Error(detail), { status: response.status });
-    }
-
-    const blob = await response.blob();
-    markTiming('stage5.download.blob_ready', { bytes: blob.size });
-    measureTiming('stage5.download.blob', 'stage5.download.response', 'stage5.download.blob_ready', {
-      bytes: blob.size,
-    });
-    _triggerBrowserDownload(blob, _extractFilename(response.headers.get('Content-Disposition') ?? ''));
+    _triggerBrowserDownload(_state.download.blob, _state.download.filename);
     _showStartOverAction();
   } catch (error) {
     console.error('Download failed:', error);
     const message = error.message || 'Download failed. Try again.';
     _showError(message, isReviewStateRecovery(message));
   } finally {
-    _setDownloadButtonState(false);
     await markAfterPaint('stage5.download.usable');
     measureTiming('stage5.download_to_usable', 'stage5.download.start', 'stage5.download.usable');
   }
@@ -272,71 +244,27 @@ const _datasetDetails = (dataset) => {
   return parts.join(' · ');
 };
 
-const _renderCertificate = (dataset, nonConformantCount) => {
+const _renderCertificate = (dataset) => {
   if (_certificateTitle) {
     _certificateTitle.textContent = dataset?.filename || 'Harmonized data';
   }
   if (_datasetMetadata) {
     _datasetMetadata.textContent = _datasetDetails(dataset) || 'Ready to download';
   }
-  if (!_certificateStatus) return;
-  if (nonConformantCount > 0) {
-    _certificateStatus.className = 'certificate-status certificate-status--attention';
-    _certificateStatus.textContent = `${nonConformantCount.toLocaleString()} ${nonConformantCount === 1 ? 'value needs' : 'values need'} review`;
-  } else {
-    _certificateStatus.className = 'certificate-status certificate-status--ready';
-    _certificateStatus.textContent = 'Ready to download';
-  }
 };
 
-const _appendImpactMetric = (ledger, key, value, label) => {
-  const metric = document.createElement('div');
-  metric.className = 'change-impact__metric';
-  metric.dataset.impactMetric = key;
-
-  const term = document.createElement('dt');
-  term.className = 'change-impact__label';
-  term.textContent = label;
-  metric.appendChild(term);
-
-  const count = document.createElement('dd');
-  count.className = 'change-impact__value';
-  count.textContent = value.toLocaleString();
-  metric.appendChild(count);
-  ledger.appendChild(metric);
-};
-
-const _renderSummary = (columnSummaries) => {
-  if (!_summaryGrid) return;
-  const totals = columnSummaries.reduce(
-    (aggregate, column) => ({
-      totalValues: aggregate.totalValues + _safeCount(column.changed_rows),
-      uniqueValues: aggregate.uniqueValues + _safeCount(column.changed_distinct_values),
-      manualValues: aggregate.manualValues + _safeCount(column.reviewer_edited_rows),
-    }),
-    { totalValues: 0, uniqueValues: 0, manualValues: 0 },
-  );
-
-  const ledger = document.createElement('dl');
-  ledger.className = 'change-impact';
-  ledger.setAttribute('aria-label', 'Changes');
-  _appendImpactMetric(ledger, 'unique_values', totals.uniqueValues, 'Unique values changed');
-  _appendImpactMetric(ledger, 'total_values', totals.totalValues, 'Total values changed');
-  _appendImpactMetric(ledger, 'manual_values', totals.manualValues, 'Values manually changed');
-  _summaryGrid.replaceChildren(ledger);
-};
-
-const _showSummaryError = (message, includeRecoveryLink = false) => {
-  if (!_summaryGrid) return;
-  _summaryGrid.replaceChildren();
+const _showSummaryError = (message, responseStatus = 0) => {
+  if (!_changeFlow) return;
   const error = document.createElement('p');
-  error.className = 'summary-empty';
-  if (includeRecoveryLink) {
+  error.className = 'change-flow__message';
+  if (responseStatus === 410) {
+    renderErrorLink(error, message, `${_stageFourUrl}?file_id=${encodeURIComponent(_state.fileId)}`, 'Open current job');
+  } else if (isReviewStateRecovery(message)) {
     renderRecoveryError(error, message, _state.fileId);
   } else {
     error.textContent = message;
   }
-  _summaryGrid.appendChild(error);
+  _changeFlow.replaceChildren(error);
 };
 
 const _sourceLabel = (source) => {
@@ -656,7 +584,7 @@ const _fetchSummary = async () => {
     const response = await fetch(_summaryEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: context.fileId }),
+      body: JSON.stringify({ file_id: context.fileId, job_id: context.jobId ?? undefined }),
     });
     markTiming('stage5.summary.fetch.response', { status: response.status });
     measureTiming('stage5.summary.request', 'stage5.summary.fetch.start', 'stage5.summary.fetch.response');
@@ -665,7 +593,14 @@ const _fetchSummary = async () => {
       throw Object.assign(new Error(detail), { status: response.status });
     }
 
-    const data = await response.json();
+    const parts = await response.formData();
+    const summary = parts.get('summary');
+    const blob = parts.get('download');
+    if (typeof summary !== 'string' || !(blob instanceof Blob)) {
+      throw new Error('The reviewed download is incomplete. Refresh the page to try again.');
+    }
+    const data = JSON.parse(summary);
+    bindJobToPage(response.headers.get('X-Harmonization-Job-Id'), 'review');
     markTiming('stage5.summary.fetch.parsed', {
       column_count: data.column_summaries?.length ?? 0,
       term_mapping_count: data.term_mappings?.length ?? 0,
@@ -673,11 +608,16 @@ const _fetchSummary = async () => {
     measureTiming('stage5.summary.parse', 'stage5.summary.fetch.response', 'stage5.summary.fetch.parsed');
     markTiming('stage5.summary.render.start');
 
+    _state.download = { blob, filename: _extractFilename(response.headers.get('Content-Disposition') ?? '') };
+    if (_downloadBtn) _downloadBtn.disabled = false;
+    const auditWarning = document.getElementById('auditWarning');
+    auditWarning.hidden = !data.audit_warning;
+    auditWarning.textContent = data.audit_warning ?? '';
     const conformanceItems = _validConformanceItems(data.non_conformant_items);
-    _state.nonConformantCount = conformanceItems.length;
-    _state.filter = _state.nonConformantCount > 0 ? 'needs_attention' : 'changed';
-    _renderCertificate(data.dataset, _state.nonConformantCount);
-    _renderSummary(data.column_summaries ?? []);
+    _state.filter = conformanceItems.length > 0 ? 'needs_attention' : 'changed';
+    _renderCertificate(data.dataset);
+    if (data.history_available) mountChangeFlow(_changeFlow, data.column_summaries ?? []);
+    else _changeFlow.textContent = 'Transformation history and review counts are unavailable.';
     _renderMappings(data.term_mappings ?? []);
     _showConformanceWarning(conformanceItems);
 
@@ -696,7 +636,7 @@ const _fetchSummary = async () => {
     console.error('Failed to fetch summary:', error);
     _showSummaryError(
       error.message || 'Unable to load the harmonization summary. Refresh the page to try again.',
-      isReviewStateRecovery(error.message),
+      error.status,
     );
   }
 };

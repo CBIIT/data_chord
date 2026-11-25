@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from threading import local
@@ -31,6 +32,8 @@ from src.integrations.harmonize import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TermIndexes = tuple[PvsIndex, IndexBundle]
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -60,6 +63,13 @@ class AgenticHarmonizeConfig:
 
 class _WorkerState(local):
     client: ConverseClient | None = None
+
+
+class _BatchExecutionError(Exception):
+    def __init__(self, error: Exception, time_to_first_error_ms: int) -> None:
+        super().__init__(str(error))
+        self.error = error
+        self.time_to_first_error_ms = time_to_first_error_ms
 
 
 class AgenticTermHarmonizer:
@@ -92,39 +102,9 @@ class AgenticTermHarmonizer:
                 "selector_model": self._config.selector_model.name,
             },
         )
-        indexed_requests = iter(enumerate(requests))
-        futures: dict[Future[TermHarmonizationResponse], int] = {}
-        time_to_first_error_ms: int | None = None
         try:
-            with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                for _ in range(worker_count):
-                    index, request = next(indexed_requests)
-                    future = executor.submit(
-                        self._harmonize_term,
-                        request,
-                        indexes[request.permissible_values],
-                    )
-                    futures[future] = index
-                try:
-                    while futures:
-                        completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
-                        for future in completed:
-                            responses[futures.pop(future)] = future.result()
-                            next_item = next(indexed_requests, None)
-                            if next_item is not None:
-                                index, request = next_item
-                                submitted = executor.submit(
-                                    self._harmonize_term,
-                                    request,
-                                    indexes[request.permissible_values],
-                                )
-                                futures[submitted] = index
-                except Exception:
-                    time_to_first_error_ms = _elapsed_ms(started_at)
-                    for future in futures:
-                        future.cancel()
-                    raise
-        except Exception as exc:
+            self._run_requests(requests, indexes, responses, worker_count, started_at)
+        except _BatchExecutionError as failure:
             logger.warning(
                 "Agentic harmonization batch failed",
                 extra={
@@ -133,11 +113,11 @@ class AgenticTermHarmonizer:
                     "worker_count": worker_count,
                     "configured_worker_limit": self._config.max_workers,
                     "duration_ms": _elapsed_ms(started_at),
-                    "time_to_first_error_ms": time_to_first_error_ms,
-                    "error_type": type(exc).__name__,
+                    "time_to_first_error_ms": failure.time_to_first_error_ms,
+                    "error_type": type(failure.error).__name__,
                 },
             )
-            raise
+            raise failure.error from failure
         if any(response is None for response in responses):
             raise RuntimeError("Agentic harmonization returned an incomplete result")
         logger.info(
@@ -151,6 +131,54 @@ class AgenticTermHarmonizer:
             },
         )
         return tuple(response for response in responses if response is not None)
+
+    def _run_requests(
+        self,
+        requests: tuple[TermHarmonizationRequest, ...],
+        indexes: dict[tuple[str, ...], _TermIndexes],
+        responses: list[TermHarmonizationResponse | None],
+        worker_count: int,
+        started_at: float | None = None,
+    ) -> None:
+        started_at = time.perf_counter() if started_at is None else started_at
+        work = iter(enumerate(requests))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures: dict[Future[TermHarmonizationResponse], int] = {}
+            for _ in range(worker_count):
+                index, request = next(work)
+                futures[self._submit_request(executor, request, indexes)] = index
+            try:
+                self._complete_requests(executor, work, indexes, futures, responses)
+            except Exception as exc:
+                time_to_first_error_ms = _elapsed_ms(started_at)
+                for future in futures:
+                    future.cancel()
+                raise _BatchExecutionError(exc, time_to_first_error_ms) from exc
+
+    def _submit_request(
+        self,
+        executor: ThreadPoolExecutor,
+        request: TermHarmonizationRequest,
+        indexes: dict[tuple[str, ...], _TermIndexes],
+    ) -> Future[TermHarmonizationResponse]:
+        return executor.submit(self._harmonize_term, request, indexes[request.permissible_values])
+
+    def _complete_requests(
+        self,
+        executor: ThreadPoolExecutor,
+        work: Iterator[tuple[int, TermHarmonizationRequest]],
+        indexes: dict[tuple[str, ...], _TermIndexes],
+        futures: dict[Future[TermHarmonizationResponse], int],
+        responses: list[TermHarmonizationResponse | None],
+    ) -> None:
+        while futures:
+            completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
+            for future in completed:
+                responses[futures.pop(future)] = future.result()
+                item = next(work, None)
+                if item is not None:
+                    index, request = item
+                    futures[self._submit_request(executor, request, indexes)] = index
 
     def _harmonize_term(
         self,
@@ -169,11 +197,7 @@ class AgenticTermHarmonizer:
             context=request.context,
         )
         predicted = result.prediction.predicted_match
-        fidelity = (
-            MatchFidelity.NONE
-            if predicted == NO_MATCH
-            else MatchFidelity(result.prediction.match_fidelity)
-        )
+        fidelity = MatchFidelity.NONE if predicted == NO_MATCH else MatchFidelity(result.prediction.match_fidelity)
         return TermHarmonizationResponse(
             matched_value=None if predicted == NO_MATCH else predicted,
             match_fidelity=fidelity,
@@ -193,8 +217,8 @@ class AgenticTermHarmonizer:
 
 def _build_indexes(
     requests: tuple[TermHarmonizationRequest, ...],
-) -> dict[tuple[str, ...], tuple[PvsIndex, IndexBundle]]:
-    indexes: dict[tuple[str, ...], tuple[PvsIndex, IndexBundle]] = {}
+) -> dict[tuple[str, ...], _TermIndexes]:
+    indexes: dict[tuple[str, ...], _TermIndexes] = {}
     for request in requests:
         if request.permissible_values in indexes:
             continue

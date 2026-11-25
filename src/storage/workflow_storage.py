@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Protocol
+from uuid import UUID
 
 from src.domain.dataset_workflow_ids import DatasetWorkflowId, dataset_workflow_id_from_value
 
@@ -533,7 +534,12 @@ class LocalWorkflowStorage:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _path_for_workflow(self, file_id: str) -> Path:
-        path = (self._workflow_dir / file_id).resolve()
+        # Convert the boundary value to a canonical UUID hex string before it
+        # participates in any path expression. The domain validator restricts
+        # IDs to exactly 32 lowercase hexadecimal characters; the UUID
+        # round-trip creates the filesystem-safe value used below.
+        canonical_id = UUID(hex=dataset_workflow_id_from_value(file_id)).hex
+        path = (self._workflow_dir / canonical_id).resolve()
         if not path.is_relative_to(self._workflow_dir):
             raise WorkflowStorageError(f"Invalid workflow id: {file_id}")
         return path

@@ -25,23 +25,17 @@
             <p id="datasetMetadata" class="quality-certificate__metadata">Loading details…</p>
           </div>
           <div class="quality-certificate__actions">
-            <span id="certificateStatus" class="certificate-status" aria-live="polite">Checking final values…</span>
-            <button id="downloadResults" class="btn-3d" type="button">
+            <button id="downloadResults" disabled class="btn-3d" type="button">
               <span class="btn-3d-shadow" aria-hidden="true"></span>
               <span class="btn-3d-edge" aria-hidden="true"></span>
               <span class="btn-3d-front">Download data</span>
             </button>
           </div>
         </div>
+        <p id="auditWarning" role="status" hidden></p>
         <p id="downloadError" class="stage-error hidden" role="alert"></p>
-      </section>
-
-      <section class="stage-card summary-card" aria-labelledby="summaryTitle">
-        <header class="summary-header">
-          <h2 id="summaryTitle" class="summary-title">Changes</h2>
-        </header>
-        <div id="summaryGrid">
-          <p class="summary-loading">Loading final output…</p>
+        <div id="changeFlow" class="change-flow">
+          <p class="change-flow__message">Loading change details…</p>
         </div>
       </section>
 
@@ -117,8 +111,7 @@
 
     <script>
       window.stageFiveConfig = {
-        summaryEndpoint: {{ app_path_for(request, 'stage_five_summary') | tojson }},
-        downloadEndpoint: {{ app_path_for(request, 'stage_five_download') | tojson }},
+        summaryEndpoint: {{ app_path_for(request, 'stage_five_prepared_review') | tojson }},
         stageFourUrl: {{ app_path_for(request, 'stage_four_review_page') | tojson }},
       };
     </script>
