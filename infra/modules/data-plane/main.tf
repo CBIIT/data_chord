@@ -23,7 +23,7 @@ resource "aws_s3_bucket_public_access_block" "workflow" {
 
 resource "aws_macie2_classification_job" "workflow" {
   count       = var.macie_classification_enabled ? 1 : 0
-  name        = "${var.name_prefix}-workflow-sensitive-data-discovery"
+  name_prefix = "${var.name_prefix}-workflow-sensitive-data-discovery-"
   description = "Daily sensitive-data discovery for DataChord workflow uploads."
   job_type    = "SCHEDULED"
   job_status  = "RUNNING"
@@ -42,6 +42,13 @@ resource "aws_macie2_classification_job" "workflow" {
 
   sampling_percentage = 100
   tags                = var.common_tags
+
+  # Macie job settings are immutable, and a cancelled job permanently retains
+  # its name and original idempotency token. Give replacements a fresh name and
+  # establish the new schedule before cancelling the prior one.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_dynamodb_table" "reference_data" {

@@ -228,8 +228,10 @@ def test_macie_scans_each_workflow_bucket_without_granting_the_application_acces
     assert "prevent_destroy = true" in account
     assert 'resource "aws_macie2_classification_job" "workflow"' in data_plane
     assert "count       = var.macie_classification_enabled ? 1 : 0" in data_plane
+    assert 'name_prefix = "${var.name_prefix}-workflow-sensitive-data-discovery-"' in data_plane
     assert 'job_type    = "SCHEDULED"' in data_plane
     assert "daily_schedule = true" in data_plane
     assert "sampling_percentage = 100" in data_plane
     assert "buckets    = [aws_s3_bucket.workflow.bucket]" in data_plane
+    assert "create_before_destroy = true" in data_plane
     assert "macie2:" not in data_plane[data_plane.index("locals {") :]
