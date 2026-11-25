@@ -48,3 +48,16 @@ run "data_plane_is_five_managed_resources" {
     error_message = "Runtime access must stay inside the deployment S3 prefix and keep reference data read-only."
   }
 }
+
+run "macie_job_replacements_use_unique_names" {
+  command = plan
+
+  variables {
+    macie_classification_enabled = true
+  }
+
+  assert {
+    condition     = aws_macie2_classification_job.workflow[0].name_prefix == "data-chord-staging-workflow-sensitive-data-discovery-"
+    error_message = "Immutable Macie classification-job replacements must receive unique generated names."
+  }
+}
