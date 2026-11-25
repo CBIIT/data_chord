@@ -9,7 +9,8 @@ import pytest
 from infra.scripts.ecr_image import (
     EcrImageError,
     image_digest,
-    require_clean_scan,
+    inspector_scan_state,
+    require_clean_inspector_findings,
     require_enhanced_scanning,
     require_inspector_available,
 )
@@ -28,36 +29,89 @@ def test_image_digest_requires_exactly_one_immutable_digest() -> None:
         image_digest({"imageDetails": [{"imageDigest": "latest"}]})
 
 
-def test_clean_completed_scan_is_deployable() -> None:
-    require_clean_scan(
+def test_completed_inspector_scan_is_ready() -> None:
+    resource_id = f"arn:aws:ecr:us-east-1:211125567571:repository/data-chord-dev/{DIGEST}"
+    assert (
+        inspector_scan_state(
+            {
+                "coveredResources": [
+                    {
+                        "resourceId": resource_id,
+                        "resourceType": "AWS_ECR_CONTAINER_IMAGE",
+                        "scanStatus": {"statusCode": "ACTIVE", "reason": "SUCCESSFUL"},
+                        "lastScannedAt": "2026-11-25T17:00:00Z",
+                    }
+                ]
+            },
+            resource_id=resource_id,
+        )
+        == "complete"
+    )
+
+
+@pytest.mark.parametrize("reason", ("PENDING_INITIAL_SCAN", "SCAN_IN_PROGRESS"))
+def test_pending_inspector_scan_is_retryable(reason: str) -> None:
+    resource_id = f"arn:aws:ecr:us-east-1:211125567571:repository/data-chord-dev/{DIGEST}"
+    assert (
+        inspector_scan_state(
+            {
+                "coveredResources": [
+                    {
+                        "resourceId": resource_id,
+                        "resourceType": "AWS_ECR_CONTAINER_IMAGE",
+                        "scanStatus": {"statusCode": "ACTIVE", "reason": reason},
+                    }
+                ]
+            },
+            resource_id=resource_id,
+        )
+        == "pending"
+    )
+
+
+def test_missing_inspector_image_is_retryable() -> None:
+    assert inspector_scan_state({"coveredResources": []}, resource_id="repo/image") == "pending"
+
+
+def test_terminal_inspector_scan_failure_is_rejected() -> None:
+    resource_id = f"arn:aws:ecr:us-east-1:211125567571:repository/data-chord-dev/{DIGEST}"
+    with pytest.raises(EcrImageError, match="cannot scan.*INACTIVE/UNSUPPORTED_OS"):
+        inspector_scan_state(
+            {
+                "coveredResources": [
+                    {
+                        "resourceId": resource_id,
+                        "resourceType": "AWS_ECR_CONTAINER_IMAGE",
+                        "scanStatus": {"statusCode": "INACTIVE", "reason": "UNSUPPORTED_OS"},
+                    }
+                ]
+            },
+            resource_id=resource_id,
+        )
+
+
+def test_clean_inspector_findings_are_deployable() -> None:
+    require_clean_inspector_findings(
         {
-            "imageScanStatus": {"status": "COMPLETE"},
-            "imageScanFindings": {"findingSeverityCounts": {"MEDIUM": 4}},
+            "findings": [
+                {"status": "ACTIVE", "severity": "MEDIUM"},
+                {"status": "CLOSED", "severity": "HIGH"},
+                {"status": "SUPPRESSED", "severity": "CRITICAL"},
+            ]
         },
         purpose="deployment",
     )
 
 
-@pytest.mark.parametrize("status", (None, "IN_PROGRESS", "FAILED"))
-def test_incomplete_scan_is_rejected(status: str | None) -> None:
-    with pytest.raises(EcrImageError, match="scan is not complete"):
-        require_clean_scan(
-            {
-                "imageScanStatus": {"status": status},
-                "imageScanFindings": {"findingSeverityCounts": {}},
-            },
-            purpose="deployment",
-        )
-
-
-def test_critical_or_high_findings_block_the_named_operation() -> None:
+def test_active_critical_or_high_findings_block_the_named_operation() -> None:
     with pytest.raises(EcrImageError, match="blocks publication.*CRITICAL.*HIGH"):
-        require_clean_scan(
+        require_clean_inspector_findings(
             {
-                "imageScanStatus": {"status": "COMPLETE"},
-                "imageScanFindings": {
-                    "findingSeverityCounts": {"CRITICAL": 1, "HIGH": 2},
-                },
+                "findings": [
+                    {"status": "ACTIVE", "severity": "CRITICAL"},
+                    {"status": "ACTIVE", "severity": "HIGH"},
+                    {"status": "ACTIVE", "severity": "HIGH"},
+                ]
             },
             purpose="publication",
         )

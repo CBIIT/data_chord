@@ -46,11 +46,14 @@ def test_release_resolves_a_published_scanned_image_and_deploys_by_digest() -> N
     assert "ecr:GetAuthorizationToken" not in workflow
     assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
     assert "image_digest" in workflow
-    assert "describe-image-scan-findings" in workflow
+    assert "describe-image-scan-findings" not in workflow
     assert "get-registry-scanning-configuration" in workflow
     assert "inspector2 list-coverage" in workflow
+    assert "inspector2 list-findings" in workflow
+    assert 'arn:aws:ecr:${AWS_REGION}:${ACCOUNT_ID}:repository/${repository}/${digest}' in workflow
     assert "ecr_image.py digest" in workflow
-    assert "ecr_image.py scan" in workflow
+    assert "ecr_image.py coverage" in workflow
+    assert "ecr_image.py findings" in workflow
     assert "--purpose deployment" in workflow
     assert "cloud_one_environment.py validate" in workflow
     assert "runtime" in workflow
@@ -189,13 +192,18 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert "docker run --rm" in workflow
     assert "docker push" in workflow
     assert workflow.index("docker run --rm") < workflow.index("docker push")
-    assert "image-scan-complete" in workflow
+    assert "image-scan-complete" not in workflow
+    assert "describe-image-scan-findings" not in workflow
     assert "Require Amazon Inspector before any image push" in workflow
     assert workflow.index("get-registry-scanning-configuration") < workflow.index("docker push")
     assert "inspector2:ListCoverage" in workflow
     assert "inspector2:ListFindings" in workflow
+    assert "inspector2 list-coverage" in workflow
+    assert "inspector2 list-findings" in workflow
+    assert 'arn:aws:ecr:${AWS_REGION}:${ACCOUNT_ID}:repository/${repository}/${digest}' in workflow
     assert "ecr_image.py digest" in workflow
-    assert "ecr_image.py scan" in workflow
+    assert "ecr_image.py coverage" in workflow
+    assert "ecr_image.py findings" in workflow
     assert "--purpose publication" in workflow
 
 

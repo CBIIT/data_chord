@@ -97,7 +97,7 @@ jobs:
           aws-region: ${{ steps.environment.outputs.region }}
           allowed-account-ids: ${{ steps.environment.outputs.account_id }}
           inline-session-policy: >-
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:GetRegistryScanningConfiguration","inspector2:ListCoverage","inspector2:ListFindings"],"Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:DescribeImageScanFindings","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ steps.environment.outputs.region }}:${{ steps.environment.outputs.account_id }}:repository/data-chord-dev"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:GetRegistryScanningConfiguration","inspector2:ListCoverage","inspector2:ListFindings"],"Resource":"*"},{"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:BatchGetImage","ecr:CompleteLayerUpload","ecr:DescribeImages","ecr:GetDownloadUrlForLayer","ecr:InitiateLayerUpload","ecr:PutImage","ecr:UploadLayerPart"],"Resource":"arn:aws:ecr:${{ steps.environment.outputs.region }}:${{ steps.environment.outputs.account_id }}:repository/data-chord-dev"}]}
 
       - name: Require Amazon Inspector before any image push
         run: |
@@ -148,31 +148,28 @@ jobs:
             --image-ids "imageTag=${IMAGE_SOURCE_SHA}" \
             --output json > /tmp/data-chord-image.json
           digest="$(python3 infra/scripts/ecr_image.py digest /tmp/data-chord-image.json)"
-          scan_error="/tmp/data-chord-image-scan.err"
-          for attempt in $(seq 1 12); do
-            if aws ecr describe-image-scan-findings \
-              --repository-name "${repository}" \
-              --image-id "imageDigest=${digest}" >/dev/null 2>"${scan_error}"; then
+          resource_id="arn:aws:ecr:${AWS_REGION}:${ACCOUNT_ID}:repository/${repository}/${digest}"
+          coverage_filter="$(printf '{\"resourceId\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"resourceType\":[{\"comparison\":\"EQUALS\",\"value\":\"AWS_ECR_CONTAINER_IMAGE\"}]}' "${resource_id}")"
+          for attempt in $(seq 1 90); do
+            aws inspector2 list-coverage \
+              --filter-criteria "${coverage_filter}" \
+              --output json > /tmp/data-chord-image-coverage.json
+            state="$(python3 infra/scripts/ecr_image.py coverage \
+              /tmp/data-chord-image-coverage.json --resource-id "${resource_id}")"
+            if [ "${state}" = "complete" ]; then
               break
             fi
-            grep -q "ScanNotFoundException" "${scan_error}" || {
-              cat "${scan_error}" >&2
-              exit 1
-            }
-            if [ "${attempt}" -eq 12 ]; then
-              echo "ECR did not expose the scan within 60 seconds." >&2
+            if [ "${attempt}" -eq 90 ]; then
+              echo "Amazon Inspector did not complete the initial image scan within 15 minutes." >&2
               exit 1
             fi
-            sleep 5
+            sleep 10
           done
-          aws ecr wait image-scan-complete \
-            --repository-name "${repository}" \
-            --image-id "imageDigest=${digest}"
-          aws ecr describe-image-scan-findings \
-            --repository-name "${repository}" \
-            --image-id "imageDigest=${digest}" \
-            --output json > /tmp/data-chord-image-scan.json
-          python3 infra/scripts/ecr_image.py scan /tmp/data-chord-image-scan.json \
+          findings_filter="$(printf '{\"ecrImageHash\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"ecrImageRegistry\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"findingStatus\":[{\"comparison\":\"EQUALS\",\"value\":\"ACTIVE\"}]}' "${digest}" "${ACCOUNT_ID}" "${repository}")"
+          aws inspector2 list-findings \
+            --filter-criteria "${findings_filter}" \
+            --output json > /tmp/data-chord-image-findings.json
+          python3 infra/scripts/ecr_image.py findings /tmp/data-chord-image-findings.json \
             --purpose publication
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"

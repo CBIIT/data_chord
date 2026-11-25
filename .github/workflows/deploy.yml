@@ -176,14 +176,21 @@ jobs:
             exit 1
           fi
           digest="$(python3 infra/scripts/ecr_image.py digest /tmp/data-chord-image.json)"
-          if ! aws ecr describe-image-scan-findings \
-            --repository-name "${repository}" \
-            --image-id "imageDigest=${digest}" \
-            --output json > /tmp/data-chord-image-scan.json; then
-            echo "::error::The published image has no completed ECR scan. Run the Publish or restore DataChord image workflow first."
+          resource_id="arn:aws:ecr:${AWS_REGION}:${ACCOUNT_ID}:repository/${repository}/${digest}"
+          coverage_filter="$(printf '{\"resourceId\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"resourceType\":[{\"comparison\":\"EQUALS\",\"value\":\"AWS_ECR_CONTAINER_IMAGE\"}]}' "${resource_id}")"
+          aws inspector2 list-coverage \
+            --filter-criteria "${coverage_filter}" \
+            --output json > /tmp/data-chord-image-coverage.json
+          if [ "$(python3 infra/scripts/ecr_image.py coverage \
+            /tmp/data-chord-image-coverage.json --resource-id "${resource_id}")" != "complete" ]; then
+            echo "::error::The published image has no completed Amazon Inspector scan. Run the Publish or restore DataChord image workflow first."
             exit 1
           fi
-          python3 infra/scripts/ecr_image.py scan /tmp/data-chord-image-scan.json \
+          findings_filter="$(printf '{\"ecrImageHash\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"ecrImageRegistry\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"%s\"}],\"findingStatus\":[{\"comparison\":\"EQUALS\",\"value\":\"ACTIVE\"}]}' "${digest}" "${ACCOUNT_ID}" "${repository}")"
+          aws inspector2 list-findings \
+            --filter-criteria "${findings_filter}" \
+            --output json > /tmp/data-chord-image-findings.json
+          python3 infra/scripts/ecr_image.py findings /tmp/data-chord-image-findings.json \
             --purpose deployment
           echo "image_digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "image_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
