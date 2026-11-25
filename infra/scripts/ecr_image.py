@@ -59,9 +59,13 @@ def require_enhanced_scanning(document: object, *, repository: str) -> None:
     """Require continuous Amazon Inspector scanning for the image repository."""
 
     root = _object(document, "ECR registry scanning configuration")
-    if root.get("scanType") != "ENHANCED":
+    configuration = _object(
+        root.get("scanningConfiguration"),
+        "ECR registry scanning configuration settings",
+    )
+    if configuration.get("scanType") != "ENHANCED":
         raise EcrImageError("ECR enhanced scanning is unavailable")
-    rules = root.get("rules")
+    rules = configuration.get("rules")
     if not isinstance(rules, list):
         raise EcrImageError("ECR registry scanning rules must be a list")
     for raw_rule in rules:

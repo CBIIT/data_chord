@@ -66,13 +66,18 @@ def test_critical_or_high_findings_block_the_named_operation() -> None:
 def test_registry_requires_continuous_enhanced_scanning_for_repository() -> None:
     require_enhanced_scanning(
         {
-            "scanType": "ENHANCED",
-            "rules": [
-                {
-                    "scanFrequency": "CONTINUOUS_SCAN",
-                    "repositoryFilters": [{"filter": "data-chord-*", "filterType": "WILDCARD"}],
-                }
-            ],
+            "registryId": "211125567571",
+            "scanningConfiguration": {
+                "scanType": "ENHANCED",
+                "rules": [
+                    {
+                        "scanFrequency": "CONTINUOUS_SCAN",
+                        "repositoryFilters": [
+                            {"filter": "data-chord-*", "filterType": "WILDCARD"}
+                        ],
+                    }
+                ],
+            },
         },
         repository="data-chord-dev",
     )
@@ -80,14 +85,27 @@ def test_registry_requires_continuous_enhanced_scanning_for_repository() -> None
     with pytest.raises(EcrImageError, match="continuous scanning does not cover"):
         require_enhanced_scanning(
             {
-                "scanType": "ENHANCED",
-                "rules": [
-                    {
-                        "scanFrequency": "SCAN_ON_PUSH",
-                        "repositoryFilters": [{"filter": "data-chord-*", "filterType": "WILDCARD"}],
-                    }
-                ],
+                "registryId": "211125567571",
+                "scanningConfiguration": {
+                    "scanType": "ENHANCED",
+                    "rules": [
+                        {
+                            "scanFrequency": "SCAN_ON_PUSH",
+                            "repositoryFilters": [
+                                {"filter": "data-chord-*", "filterType": "WILDCARD"}
+                            ],
+                        }
+                    ],
+                },
             },
+            repository="data-chord-dev",
+        )
+
+
+def test_registry_rejects_a_response_without_configuration_settings() -> None:
+    with pytest.raises(EcrImageError, match="configuration settings must be a JSON object"):
+        require_enhanced_scanning(
+            {"registryId": "211125567571"},
             repository="data-chord-dev",
         )
 
