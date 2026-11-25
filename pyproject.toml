@@ -100,4 +100,4 @@ exclude-newer = "7 days"
 exclude-newer-package = { certifi = "2026-10-20T02:25:00Z", setuptools = "2026-10-20T19:02:00Z", virtualenv = "2026-10-27T07:00:00Z" }
 
 [tool.uv.sources]
-agent-experiment = { git = "https://github.com/CBIIT/agentic_harmonization.git", rev = "2c71e1807d5181021944524209b75ecf6c40f025" }
+agent-experiment = { git = "https://github.com/CBIIT/agentic_harmonization.git", rev = "927cabb796cc0600cc9e1a0094fe11c996da7c9b" }
