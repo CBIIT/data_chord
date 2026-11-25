@@ -93,6 +93,29 @@ def test_runtime_renders_only_after_exact_network_and_digest(tmp_path: Path) -> 
     assert variables["aws_region"] == "us-east-1"
     assert variables["internal_dev_preview_enabled"] is True
     assert variables["manage_ecr_registry_scanning"] is True
+    assert variables["manage_image_repository"] is True
+    assert variables["manage_macie_account"] is True
+    assert variables["image_repository_name"] == "data-chord-dev"
+
+
+def test_qa_promotes_the_canonical_dev_image_without_owning_account_singletons(tmp_path: Path) -> None:
+    document = _document()
+    document["manage_ecr_registry_scanning"] = False
+    document["vpc_id"] = "vpc-0123456789abcdef0"
+    document["private_subnet_ids"] = [
+        "subnet-0123456789abcdef0",
+        "subnet-0fedcba9876543210",
+    ]
+    environment = _environment(tmp_path, document)
+    digest = "sha256:" + "c" * 64
+
+    result = _run("tofu-vars", environment, "cbiit", "qa", "runtime", digest)
+
+    assert result.returncode == 0, result.stderr
+    variables = json.loads(result.stdout)
+    assert variables["image_repository_name"] == "data-chord-dev"
+    assert variables["manage_image_repository"] is False
+    assert variables["manage_macie_account"] is False
 
 
 def test_internal_preview_is_dev_only_and_requires_an_ingress_cidr(tmp_path: Path) -> None:

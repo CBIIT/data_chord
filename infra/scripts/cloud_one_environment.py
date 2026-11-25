@@ -59,6 +59,7 @@ class Environment:
         return f"datachord/{self.target}/{self.stage}/cloud-one/tofu.tfstate"
 
     def tofu_variables(self, *, runtime_enabled: bool, image_digest: str | None) -> dict[str, object]:
+        image_environment = "dev" if self.target == "cbiit" and self.stage == "qa" else self.stage
         return {
             "application_role_boundary_arn": self.application_role_boundary_arn,
             "application_role_path": self.application_role_path,
@@ -67,9 +68,12 @@ class Environment:
             "environment": self.stage,
             "expected_account_id": self.account_id,
             "image_digest": image_digest,
+            "image_repository_name": f"data-chord-{image_environment}",
             "ingress_cidr_blocks": list(self.ingress_cidr_blocks),
             "internal_dev_preview_enabled": self.internal_dev_preview_enabled if runtime_enabled else False,
             "manage_ecr_registry_scanning": self.manage_ecr_registry_scanning,
+            "manage_image_repository": self.manage_ecr_registry_scanning,
+            "manage_macie_account": self.manage_ecr_registry_scanning,
             "private_subnet_ids": list(self.private_subnet_ids),
             "runtime_enabled": runtime_enabled,
             "vpc_id": self.vpc_id,

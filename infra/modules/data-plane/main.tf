@@ -21,6 +21,29 @@ resource "aws_s3_bucket_public_access_block" "workflow" {
   restrict_public_buckets = true
 }
 
+resource "aws_macie2_classification_job" "workflow" {
+  count       = var.macie_classification_enabled ? 1 : 0
+  name        = "${var.name_prefix}-workflow-sensitive-data-discovery"
+  description = "Daily sensitive-data discovery for DataChord workflow uploads."
+  job_type    = "SCHEDULED"
+  job_status  = "RUNNING"
+  initial_run = true
+
+  schedule_frequency {
+    daily_schedule = true
+  }
+
+  s3_job_definition {
+    bucket_definitions {
+      account_id = var.account_id
+      buckets    = [aws_s3_bucket.workflow.bucket]
+    }
+  }
+
+  sampling_percentage = 100
+  tags                = var.common_tags
+}
+
 resource "aws_dynamodb_table" "reference_data" {
   # checkov:skip=CKV_AWS_119:reason=The approved customer-managed DynamoDB key and key-administration model are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
   name         = "${var.name_prefix}-reference-data"

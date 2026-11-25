@@ -15,8 +15,8 @@ ENV UV_LINK_MODE=copy \
 
 RUN dnf install -y --releasever=latest \
         git \
-        python3.13-3.13.16-1.amzn2023.0.1 \
-        python3.13-libs-3.13.16-1.amzn2023.0.1 \
+        python3.13-3.13.18-1.amzn2023.0.1 \
+        python3.13-libs-3.13.18-1.amzn2023.0.1 \
         python3.13-pip-wheel-24.2-259.amzn2023.0.9 \
     && dnf clean all \
     && rm -rf /var/cache/dnf
@@ -40,8 +40,8 @@ FROM public.ecr.aws/amazonlinux/amazonlinux:2023.12.20261112.0-minimal@sha256:15
 
 RUN dnf install -y --releasever=latest \
         libstdc++ \
-        python3.13-3.13.16-1.amzn2023.0.1 \
-        python3.13-libs-3.13.16-1.amzn2023.0.1 \
+        python3.13-3.13.18-1.amzn2023.0.1 \
+        python3.13-libs-3.13.18-1.amzn2023.0.1 \
         python3.13-pip-wheel-24.2-259.amzn2023.0.9 \
         openssl-libs-3.5.8-1.amzn2023.0.4 \
         openssl-fips-provider-latest-3.5.8-1.amzn2023.0.4 \

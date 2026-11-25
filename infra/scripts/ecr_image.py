@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import sys
@@ -54,6 +55,40 @@ def require_clean_scan(document: object, *, purpose: str) -> None:
         raise EcrImageError(f"ECR scan blocks {purpose}: {blocked}")
 
 
+def require_enhanced_scanning(document: object, *, repository: str) -> None:
+    """Require continuous Amazon Inspector scanning for the image repository."""
+
+    root = _object(document, "ECR registry scanning configuration")
+    if root.get("scanType") != "ENHANCED":
+        raise EcrImageError("ECR enhanced scanning is unavailable")
+    rules = root.get("rules")
+    if not isinstance(rules, list):
+        raise EcrImageError("ECR registry scanning rules must be a list")
+    for raw_rule in rules:
+        rule = _object(raw_rule, "ECR registry scanning rule")
+        if rule.get("scanFrequency") != "CONTINUOUS_SCAN":
+            continue
+        filters = rule.get("repositoryFilters")
+        if not isinstance(filters, list):
+            raise EcrImageError("ECR repository filters must be a list")
+        for raw_filter in filters:
+            repository_filter = _object(raw_filter, "ECR repository filter")
+            pattern = repository_filter.get("filter")
+            if repository_filter.get("filterType") == "WILDCARD" and isinstance(pattern, str):
+                if fnmatch.fnmatchcase(repository, pattern):
+                    return
+    raise EcrImageError(f"Amazon Inspector continuous scanning does not cover {repository}")
+
+
+def require_inspector_available(document: object) -> None:
+    """Require a well-formed response from the Amazon Inspector coverage API."""
+
+    root = _object(document, "Amazon Inspector coverage response")
+    resources = root.get("coveredResources")
+    if not isinstance(resources, list):
+        raise EcrImageError("Amazon Inspector coverage is unavailable")
+
+
 def _object(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise EcrImageError(f"{label} must be a JSON object")
@@ -77,6 +112,11 @@ def _parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan")
     scan.add_argument("response", type=Path)
     scan.add_argument("--purpose", choices=("deployment", "publication"), required=True)
+    registry = subparsers.add_parser("registry")
+    registry.add_argument("response", type=Path)
+    registry.add_argument("--repository", required=True)
+    inspector = subparsers.add_parser("inspector")
+    inspector.add_argument("response", type=Path)
     return parser
 
 
@@ -86,8 +126,12 @@ def main(arguments: list[str]) -> int:
         document = _load(args.response)
         if args.action == "digest":
             print(image_digest(document))
-        else:
+        elif args.action == "scan":
             require_clean_scan(document, purpose=args.purpose)
+        elif args.action == "registry":
+            require_enhanced_scanning(document, repository=args.repository)
+        else:
+            require_inspector_available(document)
         return 0
     except EcrImageError as exc:
         print(f"error: {exc}", file=sys.stderr)

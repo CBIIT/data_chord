@@ -1,0 +1,16 @@
+{
+  "account_id": "211125567571",
+  "application_role_boundary_arn": "arn:aws:iam::211125567571:policy/cbiit-datachord-application-role-boundary",
+  "application_role_path": "/application/",
+  "ingress_cidr_blocks": [],
+  "internal_dev_preview_enabled": false,
+  "manage_ecr_registry_scanning": false,
+  "private_subnet_ids": [
+    "subnet-4f35f112",
+    "subnet-409a0424"
+  ],
+  "region": "us-east-1",
+  "schema_version": 1,
+  "state_bucket_name": "cbiit-datachord-state-211125567571-us-east-1",
+  "vpc_id": "vpc-29a12251"
+}

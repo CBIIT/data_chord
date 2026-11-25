@@ -11,6 +11,7 @@ data "aws_caller_identity" "current" {
 
 locals {
   name_prefix                 = "data-chord-${var.environment}"
+  image_repository_name       = coalesce(var.image_repository_name, local.name_prefix)
   deployment_prefix           = "datachord/${var.deployment_target}/${var.environment}"
   internal_dev_preview_active = var.runtime_enabled && var.internal_dev_preview_enabled
   common_tags = {

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from infra.scripts.ecr_image import EcrImageError, image_digest, require_clean_scan
+from infra.scripts.ecr_image import (
+    EcrImageError,
+    image_digest,
+    require_clean_scan,
+    require_enhanced_scanning,
+    require_inspector_available,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "infra" / "scripts" / "ecr_image.py"
@@ -55,6 +61,42 @@ def test_critical_or_high_findings_block_the_named_operation() -> None:
             },
             purpose="publication",
         )
+
+
+def test_registry_requires_continuous_enhanced_scanning_for_repository() -> None:
+    require_enhanced_scanning(
+        {
+            "scanType": "ENHANCED",
+            "rules": [
+                {
+                    "scanFrequency": "CONTINUOUS_SCAN",
+                    "repositoryFilters": [{"filter": "data-chord-*", "filterType": "WILDCARD"}],
+                }
+            ],
+        },
+        repository="data-chord-dev",
+    )
+
+    with pytest.raises(EcrImageError, match="continuous scanning does not cover"):
+        require_enhanced_scanning(
+            {
+                "scanType": "ENHANCED",
+                "rules": [
+                    {
+                        "scanFrequency": "SCAN_ON_PUSH",
+                        "repositoryFilters": [{"filter": "data-chord-*", "filterType": "WILDCARD"}],
+                    }
+                ],
+            },
+            repository="data-chord-dev",
+        )
+
+
+def test_inspector_coverage_api_must_be_available() -> None:
+    require_inspector_available({"coveredResources": []})
+
+    with pytest.raises(EcrImageError, match="coverage is unavailable"):
+        require_inspector_available({})
 
 
 def test_cli_prints_the_validated_digest(tmp_path: Path) -> None:

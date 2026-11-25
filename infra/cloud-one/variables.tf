@@ -66,6 +66,30 @@ variable "manage_ecr_registry_scanning" {
   default     = false
 }
 
+variable "manage_image_repository" {
+  description = "Whether this environment state owns the canonical ECR image repository. Promotion environments reuse that repository by digest."
+  type        = bool
+  default     = true
+}
+
+variable "image_repository_name" {
+  description = "Canonical ECR repository that contains the immutable application image."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.image_repository_name == null || can(regex("^[a-z0-9]+(?:[._/-][a-z0-9]+)*$", var.image_repository_name))
+    error_message = "image_repository_name must be null or a valid ECR repository name."
+  }
+}
+
+variable "manage_macie_account" {
+  description = "Whether this environment state owns account-level Amazon Macie activation. Exactly one state per account and Region should enable it."
+  type        = bool
+  default     = false
+}
+
 variable "image_digest" {
   description = "Immutable ECR image digest used by the ECS task definition."
   type        = string
