@@ -13,6 +13,8 @@ from typing import Any
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _BLOCKING_SEVERITIES = ("CRITICAL", "HIGH")
+_PENDING_SCAN_REASONS = ("PENDING_INITIAL_SCAN", "SCAN_IN_PROGRESS")
+_FINDING_STATUSES = ("ACTIVE", "CLOSED", "SUPPRESSED")
 
 
 class EcrImageError(ValueError):
@@ -33,26 +35,64 @@ def image_digest(document: object) -> str:
     return digest
 
 
-def require_clean_scan(document: object, *, purpose: str) -> None:
-    """Require a completed ECR scan with no critical or high findings."""
+def inspector_scan_state(document: object, *, resource_id: str) -> str:
+    """Return whether Inspector has completed the initial scan for one ECR image."""
 
-    root = _object(document, "ECR scan response")
-    scan_status = _object(root.get("imageScanStatus"), "ECR image scan status")
-    status = scan_status.get("status")
-    if status != "COMPLETE":
-        label = status if isinstance(status, str) and status else "UNKNOWN"
-        raise EcrImageError(f"ECR scan is not complete: {label}")
+    root = _object(document, "Amazon Inspector coverage response")
+    resources = root.get("coveredResources")
+    if not isinstance(resources, list):
+        raise EcrImageError("Amazon Inspector coverage is unavailable")
+    if not resources:
+        return "pending"
 
-    findings = _object(root.get("imageScanFindings"), "ECR image scan findings")
-    raw_counts = _object(findings.get("findingSeverityCounts", {}), "ECR finding severity counts")
-    blocked: dict[str, int] = {}
-    for level in _BLOCKING_SEVERITIES:
-        value = raw_counts.get(level, 0)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise EcrImageError(f"ECR returned an invalid {level} finding count")
-        blocked[level] = value
+    completed = False
+    pending = False
+    for raw_resource in resources:
+        resource = _object(raw_resource, "Amazon Inspector covered resource")
+        if resource.get("resourceId") != resource_id:
+            raise EcrImageError("Amazon Inspector returned coverage for an unexpected image")
+        if resource.get("resourceType") != "AWS_ECR_CONTAINER_IMAGE":
+            raise EcrImageError("Amazon Inspector returned an unexpected resource type")
+        status = _object(resource.get("scanStatus"), "Amazon Inspector scan status")
+        status_code = status.get("statusCode")
+        reason = status.get("reason")
+        if status_code == "ACTIVE" and reason == "SUCCESSFUL":
+            last_scanned_at = resource.get("lastScannedAt")
+            if not isinstance(last_scanned_at, str) or not last_scanned_at:
+                raise EcrImageError("Amazon Inspector omitted the completed scan timestamp")
+            completed = True
+        elif reason in _PENDING_SCAN_REASONS:
+            pending = True
+        else:
+            raise EcrImageError(
+                f"Amazon Inspector cannot scan the image: "
+                f"{status_code or 'UNKNOWN'}/{reason or 'UNKNOWN'}"
+            )
+    if completed and not pending:
+        return "complete"
+    return "pending"
+
+
+def require_clean_inspector_findings(document: object, *, purpose: str) -> None:
+    """Require no active critical or high Inspector findings for one ECR image."""
+
+    root = _object(document, "Amazon Inspector findings response")
+    findings = root.get("findings")
+    if not isinstance(findings, list):
+        raise EcrImageError("Amazon Inspector findings are unavailable")
+    blocked = dict.fromkeys(_BLOCKING_SEVERITIES, 0)
+    for raw_finding in findings:
+        finding = _object(raw_finding, "Amazon Inspector finding")
+        status = finding.get("status")
+        if status not in _FINDING_STATUSES:
+            raise EcrImageError("Amazon Inspector returned an invalid finding status")
+        severity = finding.get("severity")
+        if not isinstance(severity, str):
+            raise EcrImageError("Amazon Inspector returned an invalid finding severity")
+        if status == "ACTIVE" and severity in blocked:
+            blocked[severity] += 1
     if sum(blocked.values()):
-        raise EcrImageError(f"ECR scan blocks {purpose}: {blocked}")
+        raise EcrImageError(f"Amazon Inspector blocks {purpose}: {blocked}")
 
 
 def require_enhanced_scanning(document: object, *, repository: str) -> None:
@@ -113,9 +153,12 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="action", required=True)
     digest = subparsers.add_parser("digest")
     digest.add_argument("response", type=Path)
-    scan = subparsers.add_parser("scan")
-    scan.add_argument("response", type=Path)
-    scan.add_argument("--purpose", choices=("deployment", "publication"), required=True)
+    coverage = subparsers.add_parser("coverage")
+    coverage.add_argument("response", type=Path)
+    coverage.add_argument("--resource-id", required=True)
+    findings = subparsers.add_parser("findings")
+    findings.add_argument("response", type=Path)
+    findings.add_argument("--purpose", choices=("deployment", "publication"), required=True)
     registry = subparsers.add_parser("registry")
     registry.add_argument("response", type=Path)
     registry.add_argument("--repository", required=True)
@@ -130,8 +173,10 @@ def main(arguments: list[str]) -> int:
         document = _load(args.response)
         if args.action == "digest":
             print(image_digest(document))
-        elif args.action == "scan":
-            require_clean_scan(document, purpose=args.purpose)
+        elif args.action == "coverage":
+            print(inspector_scan_state(document, resource_id=args.resource_id))
+        elif args.action == "findings":
+            require_clean_inspector_findings(document, purpose=args.purpose)
         elif args.action == "registry":
             require_enhanced_scanning(document, repository=args.repository)
         else:
