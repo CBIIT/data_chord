@@ -1,9 +1,9 @@
 output "ecr_repository_name" {
-  value = aws_ecr_repository.app.name
+  value = local.image_repository_name
 }
 
 output "ecr_repository_url" {
-  value = aws_ecr_repository.app.repository_url
+  value = local.image_repository_url
 }
 
 output "ecs_cluster_name" {

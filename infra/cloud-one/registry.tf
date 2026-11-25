@@ -1,6 +1,7 @@
 resource "aws_ecr_repository" "app" {
   # checkov:skip=CKV_AWS_136:reason=The approved customer-managed ECR key and cross-account key policy are not yet defined;ref=CHECKOV_EXCEPTIONS.md;owner=DataChord Engineering;review=2027-02-28
-  name                 = local.name_prefix
+  count                = var.manage_image_repository ? 1 : 0
+  name                 = local.image_repository_name
   image_tag_mutability = "IMMUTABLE"
   force_delete         = false
 
@@ -13,6 +14,20 @@ resource "aws_ecr_repository" "app" {
   }
 
   tags = local.common_tags
+}
+
+moved {
+  from = aws_ecr_repository.app
+  to   = aws_ecr_repository.app[0]
+}
+
+data "aws_ecr_repository" "app" {
+  count = var.manage_image_repository ? 0 : 1
+  name  = local.image_repository_name
+}
+
+locals {
+  image_repository_url = var.manage_image_repository ? aws_ecr_repository.app[0].repository_url : data.aws_ecr_repository.app[0].repository_url
 }
 
 resource "aws_ecr_registry_scanning_configuration" "app" {
@@ -31,7 +46,8 @@ resource "aws_ecr_registry_scanning_configuration" "app" {
 }
 
 resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
+  count      = var.manage_image_repository ? 1 : 0
+  repository = aws_ecr_repository.app[0].name
   policy = jsonencode({
     rules = [{
       rulePriority = 1
@@ -44,4 +60,9 @@ resource "aws_ecr_lifecycle_policy" "app" {
       action = { type = "expire" }
     }]
   })
+}
+
+moved {
+  from = aws_ecr_lifecycle_policy.app
+  to   = aws_ecr_lifecycle_policy.app[0]
 }

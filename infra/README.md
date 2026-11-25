@@ -122,6 +122,24 @@ the singleton configuration. Configuring enhanced scanning through ECR also
 activates the account's Amazon Inspector ECR integration; the application
 state does not attempt to manage organization-wide Inspector administration.
 
+The image publisher checks both the registry configuration and the Amazon
+Inspector coverage API before it can push. A missing or unavailable Inspector
+integration therefore fails closed. After push, publication and deployment
+require a completed scan with zero active Critical or High findings. Medium and
+lower findings remain visible but do not block this development release policy.
+
+CBIIT development owns the canonical `data-chord-dev` image repository. QA
+promotion resolves the reviewed source tag to an immutable digest in that same
+repository and deploys that exact digest. It does not rebuild, retag, or copy
+the image. QA owns separate ECS, DynamoDB, S3, log, and state resources.
+
+The singleton-owning environment also enables Amazon Macie. Every environment
+creates a daily, 100-percent sensitive-data discovery job scoped to its own
+workflow upload bucket. Macie is a detective control: it reports sensitive data
+that reaches S3; it does not prevent an upload or replace application-level
+data validation. Account-level alert routing remains an external security
+operations decision.
+
 ## Mutation safety
 
 The `plan` command validates the source commit, environment, AWS identity,

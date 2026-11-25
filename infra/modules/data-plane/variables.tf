@@ -23,6 +23,12 @@ variable "name_prefix" {
   type        = string
 }
 
+variable "macie_classification_enabled" {
+  description = "Whether to create a scheduled Macie discovery job for the workflow bucket."
+  type        = bool
+  default     = false
+}
+
 variable "partition" {
   description = "AWS partition for policy ARNs."
   type        = string

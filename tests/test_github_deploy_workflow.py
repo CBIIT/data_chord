@@ -10,15 +10,19 @@ PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "publish-image.yml"
 PYTHON_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-python-project" / "action.yml"
 NODE_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-node-project" / "action.yml"
 DOCKERFILE = ROOT / "Dockerfile"
+MACIE_ACCOUNT = ROOT / "infra" / "cloud-one" / "sensitive-data.tf"
+DATA_PLANE = ROOT / "infra" / "modules" / "data-plane" / "main.tf"
 
 
-def test_release_uses_read_only_plan_and_one_dev_environment() -> None:
+def test_release_uses_read_only_plan_and_selected_environment_approval() -> None:
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'test "${REQUESTED_REF}" = "refs/heads/main"' in workflow
     assert "environment: dev-build" not in workflow
     assert "environment: dev-plan" not in workflow
-    assert workflow.count("environment: dev\n") == 1
+    assert "environment: ${{ needs.preflight.outputs.stage }}" in workflow
+    assert "- dev\n" in workflow
+    assert "- qa\n" in workflow
     assert "deployer_role_arn" in workflow
     assert "secrets.AWS_ROLE_TO_ASSUME" not in workflow
     assert "managed-session-policies: arn:aws:iam::aws:policy/ReadOnlyAccess" in workflow
@@ -43,6 +47,8 @@ def test_release_resolves_a_published_scanned_image_and_deploys_by_digest() -> N
     assert "imageTag=${IMAGE_SOURCE_SHA}" in workflow
     assert "image_digest" in workflow
     assert "describe-image-scan-findings" in workflow
+    assert "get-registry-scanning-configuration" in workflow
+    assert "inspector2 list-coverage" in workflow
     assert "ecr_image.py digest" in workflow
     assert "ecr_image.py scan" in workflow
     assert "--purpose deployment" in workflow
@@ -78,8 +84,8 @@ def test_release_applies_only_the_same_run_reviewed_plan() -> None:
     assert "artifact-ids: ${{ needs.plan.outputs.artifact_id }}" in workflow
     assert "${{ needs.plan.outputs.plan_sha256 }}" in workflow
     assert 'test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"' in workflow
-    assert 'apply -input=false "../../.plans/dev-runtime.tfplan"' in workflow
-    assert "> .plans/dev-runtime.txt" in workflow
+    assert '"../../.plans/${{ needs.preflight.outputs.stage }}-runtime.tfplan"' in workflow
+    assert '> ".plans/${stage}-runtime.txt"' in workflow
     assert "> ../../.plans/dev-runtime.txt" not in workflow
     assert "scripts.cloud_one_smoke" in workflow
     assert "aws ecs run-task" in workflow
@@ -110,7 +116,7 @@ def test_bootstrap_and_release_serialize_the_shared_state() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "group: data-chord-cbiit-dev\n" in release
+    assert "group: data-chord-cbiit-${{ inputs.stage }}\n" in release
     assert "group: data-chord-cbiit-dev\n" in bootstrap
 
 
@@ -124,7 +130,7 @@ def test_release_base_images_are_pinned_by_digest() -> None:
     assert "python:3.13-slim-bookworm" not in dockerfile
     assert dockerfile.count("dnf install -y --releasever=latest") == 2
     for patched_rpm in (
-        "python3.13-3.13.16-1.amzn2023.0.1",
+        "python3.13-3.13.18-1.amzn2023.0.1",
         "openssl-libs-3.5.8-1.amzn2023.0.4",
         "pcre2-10.40-1.amzn2023.0.5",
         "expat-2.8.3-1.amzn2023.0.1",
@@ -184,6 +190,9 @@ def test_main_publication_is_immutable_scanned_and_restorable() -> None:
     assert "docker push" in workflow
     assert workflow.index("docker run --rm") < workflow.index("docker push")
     assert "image-scan-complete" in workflow
+    assert "Require Amazon Inspector before any image push" in workflow
+    assert workflow.index("get-registry-scanning-configuration") < workflow.index("docker push")
+    assert "inspector2:ListCoverage" in workflow
     assert "ecr_image.py digest" in workflow
     assert "ecr_image.py scan" in workflow
     assert "--purpose publication" in workflow
@@ -199,3 +208,19 @@ def test_historical_image_restore_keeps_current_release_tooling() -> None:
     assert "path: application-source" in workflow[historical_checkout:build]
     assert "docker build" in workflow[build:validator]
     assert "application-source\n" in workflow[build:validator]
+
+
+def test_macie_scans_each_workflow_bucket_without_granting_the_application_access() -> None:
+    account = MACIE_ACCOUNT.read_text(encoding="utf-8")
+    data_plane = DATA_PLANE.read_text(encoding="utf-8")
+
+    assert 'resource "aws_macie2_account" "app"' in account
+    assert 'status                       = "ENABLED"' in account
+    assert "prevent_destroy = true" in account
+    assert 'resource "aws_macie2_classification_job" "workflow"' in data_plane
+    assert "count       = var.macie_classification_enabled ? 1 : 0" in data_plane
+    assert 'job_type    = "SCHEDULED"' in data_plane
+    assert "daily_schedule = true" in data_plane
+    assert "sampling_percentage = 100" in data_plane
+    assert "buckets    = [aws_s3_bucket.workflow.bucket]" in data_plane
+    assert "macie2:" not in data_plane[data_plane.index("locals {") :]

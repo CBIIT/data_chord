@@ -29,6 +29,12 @@ mock_provider "aws" {
       arn = "arn:aws:elasticloadbalancing:us-east-1:211125567571:targetgroup/data-chord-dev-preview/0123456789abcdef"
     }
   }
+
+  mock_data "aws_ecr_repository" {
+    defaults = {
+      repository_url = "211125567571.dkr.ecr.us-east-1.amazonaws.com/data-chord-dev"
+    }
+  }
 }
 
 variables {
@@ -38,6 +44,7 @@ variables {
   environment                   = "dev"
   application_role_boundary_arn = "arn:aws:iam::211125567571:policy/cbiit-datachord-application-role-boundary"
   manage_ecr_registry_scanning  = true
+  manage_macie_account          = true
   runtime_enabled               = false
 }
 
@@ -72,6 +79,14 @@ run "bootstrap_creates_registry_data_and_runtime_foundation_without_network" {
     )
     error_message = "The dev runtime must retain the researched concurrency and fail-closed identity settings."
   }
+
+  assert {
+    condition = (
+      length(aws_macie2_account.app) == 1 &&
+      one(aws_macie2_account.app).status == "ENABLED"
+    )
+    error_message = "The account owner must enable Macie and scan the workflow bucket for sensitive data every day."
+  }
 }
 
 run "non_owner_environment_does_not_manage_registry_scanning" {
@@ -86,6 +101,27 @@ run "non_owner_environment_does_not_manage_registry_scanning" {
       length(aws_ecr_registry_scanning_configuration.app) == 0
     )
     error_message = "A non-owner environment must not compete for account-and-Region Inspector or ECR registry settings."
+  }
+}
+
+run "qa_reuses_the_canonical_dev_image_repository" {
+  command = plan
+
+  variables {
+    environment                  = "qa"
+    image_repository_name        = "data-chord-dev"
+    manage_ecr_registry_scanning = false
+    manage_image_repository      = false
+    manage_macie_account         = false
+  }
+
+  assert {
+    condition = (
+      length(aws_ecr_repository.app) == 0 &&
+      output.ecr_repository_name == "data-chord-dev" &&
+      output.ecr_repository_url == "211125567571.dkr.ecr.us-east-1.amazonaws.com/data-chord-dev"
+    )
+    error_message = "QA must promote the existing immutable dev image instead of rebuilding or copying it."
   }
 }
 
